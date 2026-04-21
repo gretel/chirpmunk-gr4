@@ -1,4 +1,4 @@
-# gr4-lora
+# LOST
 
 **LoRa Open Source Transceiver (LOST)** — a C++23 LoRa PHY transceiver and wideband scanner built on [GNU Radio 4](https://github.com/fair-acc/gnuradio4), paired with a Python toolchain for monitoring, decoding, and telemetry.
 
