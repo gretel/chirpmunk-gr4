@@ -8,8 +8,8 @@
 
 - Computer able to compile and run `gnuradio4`
 - SDR:
-	- UHD (SoapyUHD module)
-	- PAPR (SoapyPlutoPAPR)
+	- UHD (SoapyUHD)
+	- ~~PAPR (SoapyPlutoPAPR)~~ (not yet)
 
 ## Credits
 
