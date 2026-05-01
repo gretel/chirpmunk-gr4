@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: ISC
+# prek (Rust-rewrite of pre-commit) configuration for gr4-lora Python tooling.
+# Run with: prek run --all-files
+# Install hooks: prek install
+#
+# C++ side hooks (clang-format v18.1.8) come from gnuradio4/.pre-commit-config.yaml
+# pattern; add them here when ready to enforce on this repo's C++ sources.
+repos:
+  - repo: https://github.com/astral-sh/uv-pre-commit
+    rev: 0.11.8
+    hooks:
+      - id: uv-lock
+      - id: uv-export
+        args: [--frozen, --no-dev, -o, requirements.txt]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.13.1
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: pyright
+        name: pyright
+        entry: uv run pyright
+        language: system
+        types: [python]
+        pass_filenames: false

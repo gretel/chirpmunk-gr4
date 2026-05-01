@@ -536,7 +536,7 @@ std::vector<ScanSetConfig> load_scan_config(const std::string& path, const std::
     cfg.device_param   = dev.param;
     cfg.clock          = dev.clock;
     cfg.l1_rate        = scan_tbl->at_path("l1_rate").value_or(16.0e6);
-    cfg.master_clock   = scan_tbl->at_path("master_clock").value_or(32.0e6);
+    cfg.master_clock   = scan_tbl->at_path("master_clock").value_or(24.0e6);
     cfg.gain           = scan_tbl->at_path("rx_gain").value_or(radio.rx_gain);
     cfg.freq_start     = scan_tbl->at_path("freq_start").value_or(radio.freq);
     cfg.freq_stop      = scan_tbl->at_path("freq_stop").value_or(cfg.freq_start);

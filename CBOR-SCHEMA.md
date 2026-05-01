@@ -17,7 +17,7 @@ broadcasts over UDP. Auto-adds ISO 8601 `"ts"` field.
 
 **Python:** `cbor2` (`pip install cbor2`).
 
-**Wireshark:** `scripts/lora_trx.lua` — dissects all frame types on UDP 5555.
+**Wireshark:** `scripts/wireshark/lora_trx.lua` — dissects all frame types on UDP 5555.
 
 ## Frame types — lora_trx
 
@@ -155,19 +155,19 @@ averaged over preamble symbols) and includes ~SF×3 dB of FFT processing gain.
 normalises the FFT peak back to per-sample power, making it comparable to
 RSSI-based SNR values reported by companion devices.
 
-**Consumers:** `lora_mon.py`, `lora_agg.py`, `lora_waterfall.py`,
-`lora_duckdb.py`, `trx_perf.py`, `trx_test.py`, `trx_ab_loop.py`,
-`test_multisf_hardware.py`, `lora_decode_meshcore.py`, `meshcore_bridge.py`,
+**Consumers:** `lora.viz.mon`, `lora-core`, `lora.viz.waterfall`,
+`lora.storage.duckdb_writer`, `lora.hwtests.trx_perf`, `trx_test.py`, `trx_ab_loop.py`,
+`test_multisf_hardware.py`, `lora.tools.decode meshcore`, `lora.bridges.meshcore`,
 `lora_trx.lua`.
 
-### Aggregated frame (from lora_agg on :5555)
+### Aggregated frame (from lora-core on :5555)
 
-Same as `lora_frame`, plus a `diversity` sub-map added by `lora_agg.py`:
+Same as `lora_frame`, plus a `diversity` sub-map added by `lora-core`:
 
 ```
 {
   // ... all lora_frame fields ...
-  "diversity": {                      // map, added by lora_agg
+  "diversity": {                      // map, added by lora-core
     "n_candidates":    2,             // uint, decode chains that decoded this frame
     "decoded_channel": 1,             // uint, rx_channel of the winning decode
     "rx_channels":     [0, 1],        // uint array, per-candidate rx_channel
@@ -205,7 +205,7 @@ for coding rate, sync word, and preamble length.
 (e.g., `freq`, `sf`, `bw`) are silently ignored. PHY parameters are
 startup-only — edit `apps/config.toml` and restart `lora_trx` to change them.
 
-**Producers:** `meshcore_tx.py`, `meshcore_bridge.py`, `lora_agg.py` (proxy).
+**Producers:** `meshcore_tx.py`, `lora.bridges.meshcore`, `lora-core` (proxy).
 
 ---
 
@@ -228,14 +228,14 @@ capacity), `"tx_disabled"` (TX graph not built — `enable_tx=false`),
 `"internal"` (uncaught exception in the TX worker, e.g. malformed CBOR).
 The `error` field is only present when `ok` is `false`.
 
-**Consumers:** `lora_agg.py` (pass-through), `lora_waterfall.py` (records TX
+**Consumers:** `lora-core` (pass-through), `lora.viz.waterfall` (records TX
 time), `lora_trx.lua`.
 
 ---
 
 ## `subscribe`
 
-Sent to `lora_trx` (or `lora_agg`) to register as a client and optionally
+Sent to `lora_trx` (or `lora-core`) to register as a client and optionally
 filter frames by sync word. Re-sending acts as a keepalive and updates the
 filter. Any non-CBOR datagram also registers the sender (no filter — receives
 all frames). Dead clients (10 consecutive `sendto` failures) are pruned.
@@ -250,8 +250,8 @@ all frames). Dead clients (10 consecutive `sendto` failures) are pruned.
 `sync_word` values: `0x12` (18) = MeshCore/Reticulum, `0x2B` (43) =
 Meshtastic, `0x34` (52) = LoRaWAN. Omit the field to receive all frames.
 
-**Producers:** `lora_common.py` (used by `lora_mon.py`, `lora_waterfall.py`,
-`lora_duckdb.py`), `lora_agg.py` (upstream keepalive), `meshcore_bridge.py`.
+**Producers:** `lora_common.py` (used by `lora.viz.mon`, `lora.viz.waterfall`,
+`lora.storage.duckdb_writer`), `lora-core` (upstream keepalive), `lora.bridges.meshcore`.
 
 ---
 
@@ -335,7 +335,7 @@ initial subscription.
 `keys_dir`, `channels_dir`, `contacts_dir`, `region_scope`, `flood_scope`
 are omitted when the string is empty. `lat` and `lon` are omitted when zero.
 
-**Consumers:** `lora_mon.py`, `lora_waterfall.py`, `meshcore_bridge.py`,
+**Consumers:** `lora.viz.mon`, `lora.viz.waterfall`, `lora.bridges.meshcore`,
 `lora_trx.lua`.
 
 ---
@@ -365,7 +365,7 @@ filters). Interval is configured via `status_interval` in `config.toml`
 
 **Note:** `rx_overflows` is a top-level key, not inside `frames`.
 
-**Consumers:** `lora_mon.py`, `lora_waterfall.py`, `meshcore_bridge.py`,
+**Consumers:** `lora.viz.mon`, `lora.viz.waterfall`, `lora.bridges.meshcore`,
 `lora_trx.lua`.
 
 ---
@@ -386,7 +386,7 @@ Bins are float32 LE magnitude values in dBFS, DC-centred (fftshift applied).
 }
 ```
 
-**Consumers:** `lora_waterfall.py`, `dc_diag.py`, `lora_trx.lua`.
+**Consumers:** `lora.viz.waterfall`, `lora.cal.dc_diag`, `lora_trx.lua`.
 
 ---
 
@@ -407,7 +407,7 @@ TX bursts alongside the RX spectrum.
 ```
 
 **Consumers:** `lora_trx.lua`. Python clients receive this type but
-`lora_waterfall.py` currently only renders `spectrum` (RX).
+`lora.viz.waterfall` currently only renders `spectrum` (RX).
 
 ---
 
@@ -446,7 +446,7 @@ SF lane in the `MultiSfDecoder` block. Encoded via `Telemetry::encode()`.
 }
 ```
 
-**Consumers:** `trx_perf.py`.
+**Consumers:** `lora.hwtests.trx_perf`.
 
 ---
 
@@ -466,7 +466,7 @@ state transition) in `MultiSfDecoder`. Encoded via `Telemetry::encode()`.
 }
 ```
 
-**Consumers:** `trx_perf.py`.
+**Consumers:** `lora.hwtests.trx_perf`.
 
 ---
 
@@ -487,7 +487,7 @@ in `MultiSfDecoder`. Encoded via `Telemetry::encode()`.
 }
 ```
 
-**Consumers:** `trx_perf.py`.
+**Consumers:** `lora.hwtests.trx_perf`.
 
 ---
 
@@ -513,7 +513,7 @@ Emitted every L1 sweep completion in `WidebandDecoder` (wideband mode only,
 }
 ```
 
-**Consumers:** `trx_perf.py`.
+**Consumers:** `lora.hwtests.trx_perf`.
 
 ---
 
@@ -534,7 +534,7 @@ Emitted when a ChannelSlot is activated or deactivated in `WidebandDecoder`
 }
 ```
 
-**Consumers:** `trx_perf.py`.
+**Consumers:** `lora.hwtests.trx_perf`.
 
 ---
 
@@ -585,7 +585,7 @@ In **legacy** mode, produced by `emitSpectrumCbor()` (emitted after
 }
 ```
 
-**Consumers:** `lora_spectrum.py`, `lora_perf.py`, `scan_test.py`.
+**Consumers:** `lora.viz.spectrum`, `lora.hwtests.scan_perf`, `lora.hwtests.scan_test`.
 
 ---
 
@@ -601,7 +601,7 @@ Emitted at the beginning of each sweep. **Legacy mode only.**
 }
 ```
 
-**Consumers:** `lora_spectrum.py`.
+**Consumers:** `lora.viz.spectrum`.
 
 ---
 
@@ -628,7 +628,7 @@ Emitted at the end of each sweep, after all L1/L2 work completes.
 **Streaming mode (8 fields):** same as legacy but **without `l2_probes`**.
 `overflows` is currently hardcoded to 0 (TODO: not wired in streaming mode).
 
-**Consumers:** `lora_perf.py`, `lora_spectrum.py`, `scan_test.py`.
+**Consumers:** `lora.hwtests.scan_perf`, `lora.viz.spectrum`, `lora.hwtests.scan_test`.
 
 ---
 
@@ -658,7 +658,7 @@ Emitted after each L2 CAD probe of a hot channel. **Legacy mode only.**
 }
 ```
 
-**Consumers:** `lora_spectrum.py`.
+**Consumers:** `lora.viz.spectrum`.
 
 ---
 
@@ -691,7 +691,7 @@ Emitted when SoapySDR overflow count increases. **Legacy mode only.**
 }
 ```
 
-**Consumers:** `lora_perf.py`, `lora_spectrum.py`.
+**Consumers:** `lora.hwtests.scan_perf`, `lora.viz.spectrum`.
 
 ---
 
@@ -713,7 +713,7 @@ completion. **Legacy mode only.**
 }
 ```
 
-**Consumers:** `lora_spectrum.py`.
+**Consumers:** `lora.viz.spectrum`.
 
 ---
 
@@ -772,22 +772,31 @@ Startup-only — edit `apps/config.toml` and restart `lora_trx`.  The
 previous `lora_config` runtime API was removed when multi-chain RX
 landed.
 
-### Aggregator
+### lora-core daemon
 
-`lora_agg.py` subscribes to `lora_trx` on port 5556 (raw frames),
-deduplicates across decode chains, and re-broadcasts aggregated frames
-(with a `diversity` sub-map) on port 5555.
+`lora-core` (`scripts/src/lora/daemon/`) is the Python data-plane
+daemon. It subscribes to one or more `lora_trx` upstreams on
+`:5556`, performs diversity aggregation, runs the per-protocol
+decoder chain (annotation pass), persists frames to DuckDB, and
+re-broadcasts the annotated stream on `:5555`.
 
 ```bash
-# Start aggregator (subscribes to lora_trx:5556, serves consumers on :5555)
-python3 scripts/apps/lora_agg.py
+# Start the daemon (subscribes to upstreams in [core].upstream,
+# serves consumers on the configured listen port — default :5555)
+lora core
 
-# Monitor aggregated frames (default port 5555)
-python3 scripts/apps/lora_mon.py
+# Live frame viewer subscribing to lora-core (annotated stream).
+lora mon
 
-# Monitor raw frames directly from lora_trx
-python3 scripts/apps/lora_mon.py --connect 127.0.0.1:5556
+# Subscribe directly to raw frames from lora_trx (no aggregation,
+# no decoder annotation, no `protocol` sub-map).
+lora mon --connect 127.0.0.1:5556
 ```
+
+Annotated stream from `lora-core :5555` carries the `protocol`
+sub-map (when a decoder claims the sync_word) and the `source`
+field. Raw stream from `lora_trx :5556` is the unannotated
+`lora_frame` (no `protocol`, no `source`).
 
 ## Python examples
 
@@ -817,4 +826,238 @@ sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 sock.sendto(msg, ("127.0.0.1", 5555))
 ```
 
+---
+
+## Protocol annotation sub-map
+
+`lora-core` runs the per-protocol decoder chain after diversity
+aggregation. Successful decoders attach a top-level `protocol`
+sub-map to the outgoing `lora_frame`. Decoder annotation runs **only**
+in `lora-core`; the raw `lora_frame` from `lora_trx :5556` is
+unannotated.
+
+```cbor
+{
+  // ... all existing lora_frame fields unchanged ...
+  "protocol": {
+    "name":   "meshcore",       // text, decoder name (matches plugin registry key)
+    "ok":     true,             // bool, decoder ran without error
+    "fields": { ... }           // map, decoder-specific fields (sub-schema below)
+  }
+}
+```
+
+Three rules:
+
+1. **Existing fields are never overwritten.** A decoder may not modify
+   `payload`, `phy`, `carrier`, `crc_valid`, `seq`, etc.
+2. **Failure leaves a record.** If a decoder claims the sync_word but
+   parsing fails, the daemon emits
+   `protocol = {name, ok: false, error: "<exception class>", fields: {}}`.
+   That makes "frames whose decoder threw" queryable in DuckDB.
+3. **Decoder-specific fields go under `fields`.** The top-level
+   `protocol` keys are reserved (`name`, `ok`, `error`, `fields`,
+   reserved for future expansion: `version`, `decode_ms`).
+
+### `meshcore` (sync_word `0x12`)
+
+```cbor
+{
+  "route":           "FLOOD",       // text, ROUTE_NAMES enum
+  "payload_type":    "TXT",         // text, PAYLOAD_NAMES enum
+  "version":         0,             // uint, header version
+  "transport_codes": [0xab, 0xcd],  // uint array, optional, present when route is T_FLOOD/T_DIRECT
+  "path":            h'AABB',       // bytes, optional, path hash list
+  "path_len":        2,             // uint, hop count
+  "sender_pubkey":   h'...',        // bytes, optional, present in ADVERT and ANON_REQ
+  "sender_name":     "DO2THX",      // text, optional, decoded from ADVERT or learned-pubkey lookup
+  "lat_e6":          53545130,      // int, optional, ADVERT location
+  "lon_e6":          9948960,       // int, optional, ADVERT location
+  "decrypted":       true,          // bool, payload decryption attempted and succeeded
+  "decrypted_text":  "Hello",       // text, optional, present when decrypted=true and ptype is TXT/GRP_TXT
+  "channel":         "public",      // text, optional, GRP_TXT decryption channel name
+  "ack_hash":        h'12345678',   // bytes, optional, ACK target hash
+  "msg_hash":        h'AABBCCDD'    // bytes, optional, deduplication hash
+}
+```
+
+### `lorawan` (sync_word `0x34`)
+
+```cbor
+{
+  "mtype":          "ConfDataUp",   // text, MType enum
+  "is_uplink":      true,           // bool
+  "is_data":        true,           // bool
+  "is_join":        false,          // bool
+  "dev_addr":       "01abcdef",     // text, hex 4-byte big-endian, lowercase, no prefix
+  "fcnt":           42,             // uint
+  "fctrl": {                        // map
+    "adr":          true,
+    "ack":          false,
+    "adr_ack_req":  false,
+    "fpending":     false,
+    "fopts_len":    0
+  },
+  "fport":          1,              // uint, optional
+  "mic":            h'AABBCCDD'     // bytes, 4-byte
+}
+```
+
+### `meshtastic` (sync_word `0x2B`) — stub
+
+```cbor
+{
+  "raw_payload": h'...'             // bytes; full protobuf parsing deferred
+}
+```
+
+### `raw` (default, unknown sync_word)
+
+```cbor
+{
+  "sync_word_hex": "0x77"           // text, observed sync word
+}
+```
+
+**Consumers:** `lora.viz.mon` (renders `protocol.fields` per decoder),
+`lora.storage.duckdb_writer` (persists `protocol.name` / `protocol.ok`
+for query), `lora.daemon.fanout` (broadcasts annotated frames on
+`:5555`).
+
+---
+
+## Multi-source
+
+`lora-core` can subscribe to multiple `lora_trx` upstreams in parallel
+(see `[[core.upstream]]` in `apps/config.toml`). Every annotated
+`lora_frame` carries its originating source name verbatim.
+
+### `source` field
+
+Mandatory on output from `lora-core`. The string matches the
+`[[core.upstream]].name` of the originating upstream. Single-source
+configs still emit it (one named source).
+
+```cbor
+{
+  // ... existing lora_frame fields ...
+  "source": "radio_868"        // text, REQUIRED on lora-core output
+}
+```
+
+### `subscribe.source` filter
+
+Optional source-name allowlist. Empty or missing = receive frames from
+all sources.
+
+```cbor
+{
+  "type":      "subscribe",
+  "sync_word": [18],           // optional, existing
+  "source":    ["radio_868"]   // optional; empty/missing = all sources
+}
+```
+
+### `lora_tx.source` selector
+
+Optional source selector. If absent, `lora-core` routes the TX through
+the first declared `[[core.upstream]]` and logs a one-time warning.
+
+```cbor
+{
+  "type":    "lora_tx",
+  "payload": h'...',
+  "source":  "radio_868"       // optional
+}
+```
+
+### `diversity.rx_sources`
+
+`diversity` sub-map gains a per-candidate source list. The array index
+matches `diversity.uuids` so consumers can pair "frame instance" with
+"received-on source".
+
+```cbor
+"diversity": {
+  // ... existing fields ...
+  "rx_sources": ["radio_868", "radio_868"]   // text array, length == n_candidates
+}
+```
+
+### `config.core.sources`
+
+The `config` map sent to clients on subscribe lists every active
+upstream so the consumer can populate UI dropdowns:
+
+```cbor
+"core": {
+  // ... existing core sub-map fields ...
+  "sources": [
+    {"name": "radio_868", "host": "127.0.0.1", "port": 5556},
+    {"name": "radio_2g4", "host": "127.0.0.1", "port": 5566}
+  ]
+}
+```
+
+**Consumers:** `lora.daemon.source` (sets `source` on every emitted
+frame), `lora.daemon.tx_proxy` (resolves `lora_tx.source` to an
+upstream UDP socket), `lora.viz.mon` (filters / colourises by source).
+
+---
+
+## Validation contract
+
+`lora-core` runs the spec's five-layer validation chain on every
+inbound CBOR datagram:
+
+```
+RF → lora_trx → UDP → [L1: socket] → [L2: CBOR parse] → [L3: schema validate]
+                                                                │
+                                                                ▼
+                                       [L4: decoder validate + try/except]
+                                                                │
+                                                                ▼
+                                                         [L5: storage]
+```
+
+| Layer | Mechanism |
+|---|---|
+| L1 — UDP socket | Max datagram 65536. Optional source-address bind: only accept from configured upstream when `[core].upstream_strict = true`. |
+| L2 — CBOR parse | `cbor2.loads()` with `tag_hook=lambda *a: None`, `object_hook=None`. Wrapped in `try/except (CBORDecodeError, MemoryError, RecursionError)` → log + drop. Pre-parse size cap `MAX_FRAME_BYTES = 16 KiB`. |
+| L3 — schema validate | `lora.core.schema.dispatch(d) -> Frame \| None`. Strict shape, type, length, range checks. Drops on violation. Never raises in the hot path. |
+| L4 — decoder validate | Each decoder validates its own bytes. All decoder code under `try/except Exception`. Failure → `protocol = {ok: false, error: type(e).__name__}`. |
+| L5 — storage | Parameterised SQL only. Bounded queue with oldest-drop policy. |
+
+### L3 bounds (representative subset)
+
+| Field | Rule |
+|---|---|
+| `type` | text, in known set; else drop silently |
+| `payload` | bytes, ≤ 256 |
+| `payload_len` | uint, ≤ 256, must equal `len(payload)` |
+| `seq` | uint, < 2^32 |
+| `phy.sf` | uint, 5 ≤ sf ≤ 12 |
+| `phy.bw` | uint, in {7800, 10400, 15600, 20800, 31250, 41700, 62500, 125000, 250000, 500000} |
+| `phy.cr` | uint, 1 ≤ cr ≤ 4 |
+| `phy.sync_word` | uint, 0..255 |
+| `phy.snr_db`, `noise_floor_db`, `peak_db` | float, finite, magnitude ≤ 200 |
+| `phy.cfo_int`, `cfo_frac`, `sfo_hat`, `ppm_error` | float, finite, magnitude bounded |
+| `phy.channel_freq`, `frequency_corrected`, `sample_rate` | float, finite, > 0 |
+| `payload_hash` | uint, < 2^64 |
+| `id` | text, regex `^[0-9a-f-]{36}$` (UUIDv4 shape) |
+| `ts` | text, ISO 8601 UTC; if missing or unparseable, daemon stamps its own |
+| `device`, `decode_label` | text, ≤ 64 chars, printable |
+| `bins` (spectrum) | bytes, length = `fft_size * 4`, `fft_size` ≤ 16384 |
+| `subscribe.sync_word` | optional uint array, length ≤ 256, each 0..255 |
+| `lora_tx.payload` | bytes, ≤ 255 |
+| `lora_tx.repeat`, `gap_ms` | uint, sane caps (e.g. repeat ≤ 1024, gap ≤ 60000) |
+
+Whitelist top-level keys — unknown keys logged at debug, stripped
+before passing on. Reject duplicate map keys at parse time (custom
+`cbor2` hook).
+
+**Consumers:** `lora.core.schema` (L3 dispatcher),
+`lora.daemon.source` (L1 + L2 wrapper), every plugin under
+`lora.decoders.*` (L4 wrapper), `lora.storage.duckdb_writer` (L5
+parameterised inserts).
 

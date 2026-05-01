@@ -144,7 +144,7 @@ struct ScanSetConfig {
     std::string device{};
     std::string device_param{};
     double      l1_rate{16.0e6};      ///< L1 wideband sample rate
-    double      master_clock{32.0e6}; ///< FPGA master clock rate
+    double      master_clock{24.0e6}; ///< FPGA master clock rate (24 MHz fits under stock-UHD 2T2R ceiling of 30.72 MHz)
     std::string clock{};
 
     // From [radio_*]

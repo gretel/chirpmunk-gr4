@@ -232,10 +232,11 @@ inline std::atomic<gr::Size_t>* build_rx_graph(gr::Graph& graph, const TrxConfig
     } else {
         // Pin MCR for dual-channel RX. UHD B210's auto-MCR renegotiation
         // during dual-channel set_rx_rate destabilises the AD9361 and causes
-        // STREAM_ERROR at activateStream. 32 MHz gives integer decimation
-        // for all supported narrowband sample rates and is the B210 default
-        // for dual-channel operation.
-        const double dualRxMcr = 32.0e6;
+        // STREAM_ERROR at activateStream. 24 MHz fits under the stock-UHD
+        // 2T2R ceiling of 30.72 MHz (which the uhd-oc fork relaxes via the
+        // AD9361 overclock patch) while still giving integer decimation for
+        // both decode rates (24M/250k=96, 24M/4M=6).
+        const double dualRxMcr = 24.0e6;
         auto         props     = lora_apps::soapy_reliability_defaults();
         props.merge(gr::property_map{
             {"device", cfg.device},

@@ -234,16 +234,19 @@ public:
 
     /// Detect chirp activity across SF7-12 on a shared SF12-sized buffer.
     /// Call initMultiSf() once before using this method.
-    /// When require_both=false (OR mode), detection is more sensitive for scan.
     ///
-    /// SF11/12 always use OR mode regardless of the require_both argument:
-    /// the 2-symbol AND window (~131 ms at SF12/BW62.5k) is longer than a
-    /// single sweep's capture on the narrowest BW, so a genuine chirp can
-    /// only reliably fill one of the two sub-windows. OR mode halves the
-    /// effective threshold's window count; alpha is still computed per-SF
-    /// by compute_alpha(sf, os) so P_fa stays bounded (higher SF → larger
-    /// M = 2^SF → proportionally higher alpha).
-    [[nodiscard]] MultiSfResult detectMultiSf(const cf32* samples, bool require_both = true) {
+    /// Detection runs an AND-mode pass first (both windows above threshold)
+    /// then falls back to OR-mode if AND yielded nothing. SF11/12 effectively
+    /// run OR-only because the 2-symbol AND window (~131 ms at SF12/BW62.5k)
+    /// is longer than a single sweep's capture on the narrowest BW, so a
+    /// genuine chirp only reliably fills one of the two sub-windows. alpha
+    /// is computed per-SF by compute_alpha(sf, os) so P_fa stays bounded
+    /// (higher SF → larger M = 2^SF → proportionally higher alpha).
+    ///
+    /// `require_both` is currently unused — kept for API stability against
+    /// callers that pass `/*require_both=*/false` to express scan intent.
+    /// AND-then-OR fallback subsumes the historical OR-only branch.
+    [[nodiscard]] MultiSfResult detectMultiSf(const cf32* samples, [[maybe_unused]] bool require_both = true) {
         assert(!_sfTable.empty() && "detectMultiSf called before initMultiSf()");
 
         // Two-tier detection + concentration-based SF classification:

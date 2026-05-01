@@ -1,10 +1,25 @@
+# ── Ports ────────────────────────────────────────────────────────────────────
+#
+# UDP:
+#   5555  lora-core consumer bus     [core].listen          mon, waterfall,
+#                                                            bridge, wav
+#                                                            subscribe here
+#   5556  lora_trx producer          [trx.network].udp_port lora-core upstream
+#   5557  lora_scan producer         [scan.network].udp_port lora-core upstream
+# TCP:
+#   7834  meshcore-bridge companion  [bridge.meshcore].listen_port
+#   7835  serial-bridge              [bridge.serial].listen_port
+#
+# Consumers (lora mon / waterfall / bridge) default to 127.0.0.1:5555.
+# Override with --connect HOST:PORT. lora-core must be running for any
+# consumer on 5555 to receive data; without it 5555 is dead.
+
 # ── Hardware ─────────────────────────────────────────────────────────────────
 
 [device]
-# driver = "uhd"
 driver = "uhd"                # SoapySDR driver name (required)
-# param  = ""
-param  = "type=b200,num_recv_frames=512,recv_frame_size=16360"
+#param  = "type=b200,num_recv_frames=512,recv_frame_size=16360,fpga=usrp_b210_fpga.bin"
+param  = "type=b200"
 # clock  = "internal"         # options: internal | external | gpsdo
 clock  = "external"
 
@@ -23,6 +38,7 @@ tx_channel = 0                # SoapySDR TX channel index
 tx_antenna = "TX/RX"          # stock B210 FPGA label (B220 Mini bitstream uses "TRXA")
 rx_gain    = 40
 tx_gain    = 73.5             # 97 mW
+#tx_gain    = 35.5
 # lo_offset      = 0          # Hz, 0 = disabled
 lo_offset        = 62500      # shift DC spur out of passband
 # dc_offset_auto = true       # hardware DC offset correction
@@ -41,12 +57,11 @@ sf           = 8
 bw           = 62500
 cr           = 8              # CR 4/8 (denominator; valid 5..8)
 sync_word    = 0x12
-# preamble_len = 16           # MeshCore RadioLib SX1262::begin() default; also RX detection threshold
-preamble_len   = 16
+# preamble_len   = 16
 
 # RX pipeline. One MultiSfDecoder per bandwidth per radio channel.
 [trx.receive]
-bandwidths = [62500]   # single BW matching MeshCore EU; multi-BW [62500,125000,250000] causes cross-BW false locks
+bandwidths = [62500]                   # single BW matching MeshCore EU; multi-BW [62500,125000,250000] causes cross-BW false locks
 
 # Promiscuous chain: decode any LoRa frame regardless of sync word and
 # tag each frame with the observed value.  Agnostic default — captures
@@ -68,30 +83,69 @@ label = "promisc"
 
 [trx.network]
 # udp_listen      = "127.0.0.1"
-# udp_port        = 5556
-# status_interval = 10        # seconds between heartbeats (0 = off)
+# udp_port        = 5556        # lora_trx producer; lora-core subscribes here
+# status_interval = 10          # seconds between heartbeats (0 = off)
 # lbt             = true
 # lbt_timeout_ms  = 2000
 # tx_queue_depth  = 8
 
-# ── MeshCore node identity (meshcore_bridge.py) ─────────────────────────────
+# ── lora-core daemon (Phase 2G typed schema) ─────────────────────────────────
+#
+# Strict no-compat: legacy [aggregator] / [meshcore] keys are rejected.
+# `lora core` listens on the address below; override at the CLI with
+# `--listen HOST:PORT` if needed.
 
-[meshcore]
-name        = "DO2THX 📡"
-lat         = 53.54513
-lon         = 9.94896
-flood_scope = "de-hh"
+[core]
+listen             = "127.0.0.1:5555"
+fanout_queue_depth = 10000
 
-# ── Aggregator (lora_agg.py) ─────────────────────────────────────────────────
-# Section must contain at least one key for Python to treat the aggregator as
-# enabled (C++ falls back to the same defaults either way). Populating the
-# defaults explicitly resolves the empty-section ambiguity between the two
-# consumers.
+[[core.upstream]]
+name   = "radio_868"
+host   = "127.0.0.1"
+port   = 5556
+strict = true
 
-[aggregator]
-upstream  = "127.0.0.1:5556"
-listen    = "127.0.0.1:5555"
-window_ms = 200
+[core.aggregator]
+window_ms      = 200
+max_candidates = 8
+
+[core.decoders]
+enabled = ["meshcore", "lorawan", "raw"]
+
+[core.decoders.meshcore]
+decrypt          = true
+strict_sync_word = true
+
+[core.decoders.lorawan]
+decrypt = false
+
+[core.identity]
+identity_file     = "data/meshcore/identity.bin"
+keys_dir          = "data/meshcore/keys"
+channels_dir      = "data/meshcore/channels"
+contacts_dir      = "data/meshcore/contacts"
+reload_interval_s = 5
+
+[core.storage]
+backend               = "duckdb"
+db_path               = "data/lora.duckdb"
+batch_rows            = 256
+batch_ms              = 1000
+checkpoint_interval_s = 300
+
+# ── meshcore-bridge ──────────────────────────────────────────────────────────
+#
+# Identity / advert (name, lat, lon, flood_scope) are NOT in TOML — they live
+# in the bridge's CBOR EEPROM (config.cbor) and are mutated via the companion
+# protocol (SET_ADVERT_NAME, SET_ADVERT_LATLON, SET_FLOOD_SCOPE).
+
+[bridge.meshcore]
+listen_port = 7834
+tx_via_core = true
+eeprom_path = "data/meshcore/config.cbor"
+
+[bridge.serial]
+listen_port = 7835
 
 # ── Scanner mode (lora_scan) ─────────────────────────────────────────────────
 
@@ -112,4 +166,12 @@ master_clock = 8000000           # 2x L1 rate
 
 [scan.network]
 # udp_listen = "127.0.0.1"
-# udp_port   = 5557
+# udp_port   = 5557           # lora_scan producer; consumers subscribe here
+
+[startup]
+# Services supervised by `lora daemon`. Each entry maps to a `lora`
+# subcommand; dot-separated names become the argv path
+# (`bridge.meshcore` → `lora bridge meshcore`). Visualisation cmds
+# (mon / waterfall / spectrum) and one-shots (tx / hwtest) are
+# intentionally not allowed here — they stay foreground.
+services = ["core", "bridge.meshcore", "wav"]

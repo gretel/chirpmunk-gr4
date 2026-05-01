@@ -109,3 +109,11 @@ channel_bw   = 62500             # MeshCore narrowband channel width
 [scan.network]
 # udp_listen = "127.0.0.1"
 # udp_port   = 5557
+
+# [startup]
+# # Services supervised by `lora daemon`. Each entry maps to a `lora`
+# # subcommand; dot-separated names become the argv path
+# # (`bridge.meshcore` → `lora bridge meshcore`). Visualisation cmds
+# # (mon / waterfall / spectrum) and one-shots (tx / hwtest) are
+# # intentionally not allowed here — they stay foreground.
+# services = ["core", "bridge.meshcore", "wav"]

@@ -379,8 +379,6 @@ struct ScanController : gr::Block<ScanController, gr::NoTagPropagation> {
 
         const uint32_t ch          = _hotChannels[_probeIndex];
         const double   channelFreq = channelCenterFreq(ch);
-        const bool     isHot       = (_probeIndex < _probeIsHot.size()) && _probeIsHot[_probeIndex];
-        const bool     isRefine    = (_probeIndex < _probeIsRefine.size()) && _probeIsRefine[_probeIndex];
 
         // Initialize best result for this channel on first BW.
         // All channels probed narrowest-first (correct SF identification).

@@ -893,8 +893,6 @@ static int streaming_main(ScanSetConfig& cfg) {
     gr::lora::log_ts("info ", "lora_scan", "mode       streaming  @ %.1f MS/s, center %.3f MHz  (buffer %u ms)", cfg.l1_rate / 1e6, cfg.center_freq() / 1e6, static_cast<unsigned>(cfg.buffer_ms));
     gr::lora::log_ts("info ", "lora_scan", "telemetry  udp://%s:%u", cfg.udp_listen.c_str(), cfg.udp_port);
 
-    lora_apps::apply_fpga_workaround(cfg.device, cfg.device_param);
-
     int savedStdout = -1;
     if (cfg.cbor_out) {
         std::fflush(stdout);
@@ -1026,6 +1024,11 @@ static int streaming_main(ScanSetConfig& cfg) {
 // ─── main ─────────────────────────────────────────────────────────────────────
 
 int main(int argc, char** argv) {
+    // Install before any code that can throw so a UHD/libusb error
+    // surfaces as a usable diagnostic instead of the libc++abi default
+    // banner.  Mirrors lora_trx.cpp.
+    lora_apps::install_terminate_handler("lora_scan");
+
     std::string config_path, log_level;
     bool        cbor_out = false;
     int         rc       = parse_scan_args(argc, argv, config_path, log_level, cbor_out);
@@ -1083,8 +1086,6 @@ int main(int argc, char** argv) {
             gr::lora::log_ts("info ", "lora_scan", "mode       %u sweep%s", cfg.sweeps, cfg.sweeps == 1 ? "" : "s");
         }
         gr::lora::log_ts("info ", "lora_scan", "telemetry  udp://%s:%u", cfg.udp_listen.c_str(), cfg.udp_port);
-
-        lora_apps::apply_fpga_workaround(cfg.device, cfg.device_param);
 
         // stdout protection: UHD/SoapySDR may print to stdout during device init
         if (cfg.cbor_out) {

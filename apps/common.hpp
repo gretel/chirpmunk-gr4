@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <exception>
 #include <fcntl.h>
 #include <sstream>
 #include <string>
@@ -38,13 +39,42 @@ inline std::atomic<bool>& install_signal_handler() {
     return g_stop;
 }
 
-// Homebrew UHD patches B2XX_FPGA_FILE_NAME to absolute Cellar paths that
-// break after revision bumps — override with bare filenames.
-// Only applies to B200-family devices (B200, B200mini, B210, B220).
-inline void apply_fpga_workaround(const std::string& device, std::string& device_param) {
-    if (device == "uhd" && device_param.find("type=b2") != std::string::npos && device_param.find("fpga=") == std::string::npos) {
-        device_param += ",fpga=usrp_b210_fpga.bin";
+/// Holds the app name pointer used by the std::terminate handler.
+/// Set by :func:`install_terminate_handler` so the handler can
+/// produce role-tagged diagnostics without globals at the call site.
+inline const char* g_terminate_app_name = "app"; // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
+
+[[noreturn]] inline void terminate_handler() {
+    // Print whatever exception (if any) is in flight so the harness log
+    // shows the cause before the process aborts. The default libc++abi
+    // banner ("terminating due to uncaught exception of type X") elides
+    // the .what() text — useless for triaging UHD/libusb crashes.
+    if (auto eptr = std::current_exception()) {
+        try {
+            std::rethrow_exception(eptr);
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "%s: terminate(): %s\n", g_terminate_app_name, e.what());
+        } catch (...) {
+            std::fprintf(stderr, "%s: terminate(): unknown exception\n", g_terminate_app_name);
+        }
+    } else {
+        std::fprintf(stderr, "%s: terminate(): no current exception\n", g_terminate_app_name);
     }
+    std::fflush(stderr);
+    std::abort();
+}
+
+/// Install a std::terminate handler that names the app and logs the
+/// in-flight exception's .what() before aborting. Idempotent.
+///
+/// Catches the LIBUSB_ERROR_OTHER / uhd::usb_error class of crashes
+/// that previously appeared as the libc++abi default banner without
+/// the actual UHD error string. After installation, the harness's
+/// _assert_alive can point at a log file that ends with the exact
+/// failure message instead of the symbol-stripped abort tail.
+inline void install_terminate_handler(const char* app_name) {
+    g_terminate_app_name = app_name ? app_name : "app";
+    std::set_terminate(terminate_handler);
 }
 
 struct HardwareInfo {
@@ -53,68 +83,23 @@ struct HardwareInfo {
     std::size_t rx_channels{0};
 };
 
-/// Query hardware info via SoapySDR enumerate (lightweight USB/mDNS scan).
-/// Does NOT open the device — the scheduler's reinitDevice() will be the
-/// first and only device open, avoiding UHD/libusb re-enumeration races.
-/// Channel counts are inferred from the driver name since enumerate doesn't
-/// expose them; callers can refine after the device is actually open.
+/// Log device + driver params at startup. Returns inferred channel
+/// counts; serial is left empty (callers display "?"). Cannot call
+/// SoapySDRDevice_enumerate here — on UHD that opens the device,
+/// loads firmware, then closes, racing against the scheduler's
+/// reinitDevice() and aborting Device::make. Keep this function
+/// strictly out-of-band of the hardware.
 inline HardwareInfo log_hardware_info(const char* app_name, const std::string& device, const std::string& device_param) {
-    auto devKwargs = gr::blocks::sdr::soapy::Kwargs{{"driver", device}};
-    if (!device_param.empty()) {
-        std::stringstream ss(device_param);
-        std::string       keyVal;
-        while (std::getline(ss, keyVal, ',')) {
-            auto pos = keyVal.find('=');
-            if (pos != std::string::npos) {
-                devKwargs[keyVal.substr(0, pos)] = keyVal.substr(pos + 1);
-            }
-        }
-    }
-
-    // Enumerate to get serial + driver label without a full device open
-    std::string serial, driver_label;
-    {
-        SoapySDRKwargs enumArgs{};
-        for (auto& [k, v] : devKwargs) {
-            SoapySDRKwargs_set(&enumArgs, k.c_str(), v.c_str());
-        }
-        std::size_t enumLen     = 0;
-        auto*       enumResults = SoapySDRDevice_enumerate(&enumArgs, &enumLen);
-        for (std::size_t i = 0; i < enumLen; ++i) {
-            for (std::size_t j = 0; j < enumResults[i].size; ++j) {
-                auto key = std::string_view(enumResults[i].keys[j]);
-                if (key == "serial" && serial.empty()) {
-                    serial = enumResults[i].vals[j];
-                }
-                if (key == "driver" && driver_label.empty()) {
-                    driver_label = enumResults[i].vals[j];
-                }
-                if (key == "label" && driver_label.empty()) {
-                    driver_label = enumResults[i].vals[j];
-                }
-            }
-        }
-        SoapySDRKwargsList_clear(enumResults, enumLen);
-        SoapySDRKwargs_clear(&enumArgs);
-    }
-
-    // Infer channel counts from driver — avoids a full device open.
-    // B210/B220 via UHD: 2 TX, 4 RX.  Single-channel devices: 1 each.
     std::size_t nTx = 1, nRx = 1;
     if (device == "uhd" && device_param.find("type=b2") != std::string::npos) {
         nTx = 2;
         nRx = 4;
     }
-
-    // Plumbing details — demoted to debug.  The human-facing "device" line
-    // is emitted by the caller (lora_trx/lora_scan) using the returned
-    // HardwareInfo so it can include the clock source inline.
-    gr::lora::log_ts("debug", app_name, "hw probe   driver=%s (%zuT%zuR inferred)", driver_label.empty() ? device.c_str() : driver_label.c_str(), nTx, nRx);
+    gr::lora::log_ts("debug", app_name, "hw probe   driver=%s (%zuT%zuR inferred)", device.c_str(), nTx, nRx);
     if (!device_param.empty()) {
         gr::lora::log_ts("debug", app_name, "hw params  %s", device_param.c_str());
     }
-
-    return {.serial = serial, .tx_channels = nTx, .rx_channels = nRx};
+    return {.serial = "", .tx_channels = nTx, .rx_channels = nRx};
 }
 
 // --- SoapyBlock reliability defaults (shared by lora_trx and lora_scan) ---

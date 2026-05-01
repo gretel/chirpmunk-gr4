@@ -82,14 +82,10 @@ const suite<"ScanClassification"> tests = [] {
         const std::size_t copyLen = std::min(chirpLen, full.size());
         std::copy_n(full.begin(), copyLen, partial.begin());
 
-        // AND mode should fail (second window is mostly zeros):
-        auto rAnd = cad.detectMultiSf(partial.data(), /*require_both=*/true);
-        // OR mode should detect SF12:
+        // detectMultiSf runs AND-then-OR-fallback internally; SF11/12 use
+        // OR-mode regardless. Explicit OR call documents scan intent.
         auto rOr = cad.detectMultiSf(partial.data(), /*require_both=*/false);
 
-        // SF11/12 use OR internally regardless, so even require_both=true
-        // should detect SF12 after C3. But the explicit OR call is the
-        // baseline contract.
         expect(rOr.detected) << "SF12 OR-mode must detect partial burst";
         if (rOr.detected) {
             expect(eq(rOr.sf, 12U)) << "SF12 OR-mode classified as SF" << rOr.sf;

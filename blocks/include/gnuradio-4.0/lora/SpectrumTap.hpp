@@ -68,7 +68,7 @@ struct SpectrumTap : gr::Block<SpectrumTap, gr::NoTagPropagation> {
         // the CircularBuffer double-reserve abort (the OutputSpan ctor
         // already reserved the whole tag buffer).
         for (const auto& [relIndex, tagMapRef] : inSpan.tags()) {
-            outSpan.publishTag(tagMapRef.get(), relIndex);
+            outSpan.publishTag(tagMapRef.get(), static_cast<std::size_t>(relIndex));
         }
 
         // passthrough: copy input to output

@@ -23,3 +23,10 @@ tmp/
 uv.lock
 .worktrees/
 .rtk/
+.coverage
+.coverage.*
+htmlcov/
+
+# direnv shell config — machine-local, points at user's UHD_IMAGES_DIR keg
+# Each developer may have stock uhd, uhd-oc fork, or a different keg layout.
+.envrc

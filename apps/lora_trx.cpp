@@ -151,7 +151,7 @@ std::unique_ptr<gr::scheduler::Simple<gr::scheduler::ExecutionPolicy::singleThre
             {"num_channels", gr::Size_t{2}},
             {"tx_antennae", cfg.tx_antenna.empty() ? std::vector<std::string>{} : std::vector<std::string>{cfg.tx_antenna}},
             {"clock_source", cfg.clock},
-            {"master_clock_rate", 32.0e6},
+            {"master_clock_rate", 24.0e6},
             {"timed_tx", true},
             {"wait_burst_ack", true},
             {"max_underflow_count", gr::Size_t{0}},
@@ -292,6 +292,11 @@ private:
 } // namespace
 
 int main(int argc, char* argv[]) {
+    // Install the structured terminate handler before anything that can
+    // throw — UHD/libusb errors raised from the SoapySDR IO thread bypass
+    // our scheduler-thread try/catch and only land here.
+    lora_apps::install_terminate_handler("lora_trx");
+
     std::string config_path;
     std::string log_level;
     int         rc = parse_args(argc, argv, config_path, log_level);
@@ -324,8 +329,6 @@ int main(int argc, char* argv[]) {
     }
 
     auto& stop_flag = lora_apps::install_signal_handler();
-
-    lora_apps::apply_fpga_workaround(cfg.device, cfg.device_param);
 
     auto os = static_cast<uint8_t>(cfg.rate / static_cast<float>(cfg.bw));
 
@@ -526,6 +529,12 @@ int main(int argc, char* argv[]) {
 
     gr::scheduler::Simple<gr::scheduler::ExecutionPolicy::singleThreadedBlocking> rx_sched;
     rx_sched.timeout_inactivity_count = 10U; // log after 10s of no progress (SoapySource IO thread drives progress)
+    // NB: a `watchdog_max_warnings` knob exists on newer gnuradio4 master
+    // (post-4ab98c4) — when this submodule is bumped, set it here so a
+    // multi-minute pipeline stall (wedged libusb, SoapyUHD reactivate
+    // stuck) self-aborts via the scheduler's ERROR transition. Until
+    // then, host-side detection lives in the harness's assert_alive
+    // poll on the lora_trx process group.
     if (auto ret = rx_sched.exchange(std::move(rx_graph)); !ret) {
         gr::lora::log_ts("error", "lora_trx", "RX scheduler init failed");
         if (tx_sched) {

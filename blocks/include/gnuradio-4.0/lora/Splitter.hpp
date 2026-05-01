@@ -49,7 +49,7 @@ struct Splitter : gr::Block<Splitter, gr::NoTagPropagation> {
         // sample positions downstream.
         for (const auto& [relIndex, tagMapRef] : inSpan.tags()) {
             for (std::size_t i = 0; i < outs.size(); i++) {
-                outs[i].publishTag(tagMapRef.get(), relIndex);
+                outs[i].publishTag(tagMapRef.get(), static_cast<std::size_t>(relIndex));
             }
         }
 
