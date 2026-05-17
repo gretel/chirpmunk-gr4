@@ -38,7 +38,7 @@ struct Config {
 };
 
 static constexpr uint8_t  SF_VALUES[] = {7, 8, 9, 10, 11, 12};
-static constexpr uint8_t  CR_VALUES[] = {1, 2, 4};
+static constexpr uint8_t  CR_VALUES[] = {1, 2, 3, 4};
 static constexpr uint32_t BW_VALUES[] = {62500, 125000};
 
 static constexpr uint16_t SYNC_WORD     = 0x12;

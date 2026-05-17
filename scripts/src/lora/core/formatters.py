@@ -337,6 +337,7 @@ def format_frame(
     peak_db = phy.get("peak_db")
     rx_ch = msg.get("rx_channel")
     decode_label = msg.get("decode_label")
+    source = msg.get("source", "")
     dc = " (downchirp)" if msg.get("is_downchirp") else ""
 
     # BW field: 62500 -> "62.5k", 125000 -> "125k", etc.
@@ -353,6 +354,8 @@ def format_frame(
         header += f" [{sanitize_text(decode_label)}]"
     if rx_ch is not None:
         header += f" ch={rx_ch}"
+    if source:
+        header += f" src={sanitize_text(source)}"
     if snr_db is not None:
         header += f" SNR={snr_db:.1f}dB"
     if snr_db_td is not None:

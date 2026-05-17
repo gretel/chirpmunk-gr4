@@ -1,0 +1,25 @@
+# Single-DUT decode baseline for the B220/UHD path.
+#
+# Equivalent to:
+#   lora hwtest decode --tcp heltec.local:5000 --matrix sf_sweep \
+#     --config apps/config-uhd.toml --binary ./build/apps/lora_trx
+#
+# Useful as a reference run before/after a DSP change, and to verify
+# the new --test-config flow still reproduces legacy single-DUT output.
+
+[test]
+label      = "b220-baseline"
+hypothesis = "B220 UHD baseline (single DUT)"
+
+[reference]
+tcp = "heltec.local:5000"
+
+[matrix]
+name = "sf_sweep"
+
+[[dut]]
+label       = "b220"
+binary      = "./build/apps/lora_trx"
+config_file = "apps/config-uhd.toml"
+host        = "127.0.0.1"
+port        = 5556

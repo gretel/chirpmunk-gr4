@@ -194,19 +194,25 @@ const boost::ut::suite<"CRC Verify RX"> crc_verif_rx_tests = [] {
 
         expect(ge(payload.size(), 2UZ)) << "payload must be >= 2 bytes for LoRa CRC";
 
-        // Compute LoRa CRC: crc16(payload[0..len-3]) ^ last_two_bytes
-        uint16_t crc = crc16(std::span<const uint8_t>(payload.data(), payload.size() - 2));
-        crc ^= static_cast<uint16_t>(payload[payload.size() - 1]);
-        crc ^= static_cast<uint16_t>(payload[payload.size() - 2]) << 8;
+        // Compute plain CRC-16/XMODEM over all payload bytes (matching SX1262).
+        const uint16_t expected_crc = crc16(std::span<const uint8_t>(payload.data(), payload.size()));
 
-        // Reconstruct CRC from the 4 nibbles at end of tx_03_with_crc.u8
+        // Read the (whitened) CRC nibbles from the test vector.
         auto with_crc = load_u8("tx_03_with_crc.u8");
         expect(ge(with_crc.size(), 4UZ)) << "tx_03_with_crc.u8 too small";
-        std::size_t crc_start = with_crc.size() - 4;
+        const std::size_t crc_start = with_crc.size() - 4UZ;
+        std::array<uint8_t, 4> nibs{with_crc[crc_start], with_crc[crc_start + 1UZ], with_crc[crc_start + 2UZ], with_crc[crc_start + 3UZ]};
 
-        uint16_t crc_from_nibs = static_cast<uint16_t>(static_cast<unsigned>(with_crc[crc_start]) | (static_cast<unsigned>(with_crc[crc_start + 1]) << 4) | (static_cast<unsigned>(with_crc[crc_start + 2]) << 8) | (static_cast<unsigned>(with_crc[crc_start + 3]) << 12));
+        // Dewhiten CRC nibbles: whitening sequence continues from payload.
+        for (std::size_t byte_idx = 0u; byte_idx < 2u; ++byte_idx) {
+            const uint8_t ws = whitening_seq[(payload.size() + byte_idx) % whitening_seq.size()];
+            nibs[byte_idx * 2u] ^= (ws & 0x0F);
+            nibs[byte_idx * 2u + 1u] ^= ((ws >> 4u) & 0x0F);
+        }
 
-        expect(eq(crc, crc_from_nibs)) << "CRC mismatch: computed=0x" << std::format("{:04x}", crc) << " from_nibs=0x" << std::format("{:04x}", crc_from_nibs);
+        const uint16_t dewhitened_crc = static_cast<uint16_t>(static_cast<unsigned>(nibs[0]) | (static_cast<unsigned>(nibs[1]) << 4u) | (static_cast<unsigned>(nibs[2]) << 8u) | (static_cast<unsigned>(nibs[3]) << 12u));
+
+        expect(eq(expected_crc, dewhitened_crc)) << "CRC mismatch: computed=0x" << std::format("{:04x}", expected_crc) << " from_nibs=0x" << std::format("{:04x}", dewhitened_crc);
     };
 };
 
@@ -290,13 +296,9 @@ const boost::ut::suite<"Full RX pipeline (algorithm-level)"> full_rx_pipeline_te
             uint8_t low_nib  = nibbles[nib_idx];
             uint8_t high_nib = nibbles[nib_idx + 1];
 
-            if (i < hdr.payload_len) {
-                // Dewhiten payload bytes
-                uint8_t ws = whitening_seq[i % whitening_seq.size()];
-                low_nib ^= (ws & 0x0F);
-                high_nib ^= ((ws >> 4) & 0x0F);
-            }
-            // CRC bytes are not dewhitened
+            uint8_t ws = whitening_seq[i % whitening_seq.size()];
+            low_nib ^= (ws & 0x0F);
+            high_nib ^= ((ws >> 4) & 0x0F);
 
             decoded_bytes.push_back(static_cast<uint8_t>((high_nib << 4) | low_nib));
         }
@@ -305,9 +307,7 @@ const boost::ut::suite<"Full RX pipeline (algorithm-level)"> full_rx_pipeline_te
         expect(ge(decoded_bytes.size(), static_cast<std::size_t>(hdr.payload_len) + 2)) << "Not enough decoded bytes for CRC check: " << decoded_bytes.size();
 
         if (hdr.has_crc && hdr.payload_len >= 2 && decoded_bytes.size() >= hdr.payload_len + 2u) {
-            uint16_t computed_crc = crc16(std::span<const uint8_t>(decoded_bytes.data(), hdr.payload_len - 2));
-            computed_crc ^= static_cast<uint16_t>(decoded_bytes[hdr.payload_len - 1]);
-            computed_crc ^= static_cast<uint16_t>(static_cast<unsigned>(decoded_bytes[hdr.payload_len - 2]) << 8);
+            uint16_t computed_crc = crc16(std::span<const uint8_t>(decoded_bytes.data(), hdr.payload_len));
 
             uint16_t received_crc = static_cast<uint16_t>(static_cast<unsigned>(decoded_bytes[hdr.payload_len]) | (static_cast<unsigned>(decoded_bytes[hdr.payload_len + 1]) << 8));
 
@@ -397,6 +397,14 @@ const boost::ut::suite<"Multi-config RX pipeline"> multi_config_rx_tests = [] {
             std::size_t          data_nibs = hdr.payload_len * 2 + (hdr.has_crc ? 4 : 0);
             std::vector<uint8_t> data_nibbles(nibbles.begin() + 5, nibbles.begin() + static_cast<std::ptrdiff_t>(std::min(nibbles.size(), 5 + data_nibs)));
             auto                 decoded_bytes = dewhiten(data_nibbles, hdr.payload_len);
+
+            // Dewhiten CRC bytes: SX1262 whitens entire data stream including CRC.
+            // dewhiten() only dewhitens the first pay_len payload bytes; CRC bytes
+            // at index pay_len and pay_len+1 need the same per-byte XOR here.
+            if (decoded_bytes.size() >= hdr.payload_len + 2u) {
+                decoded_bytes[hdr.payload_len] ^= whitening_seq[hdr.payload_len % whitening_seq.size()];
+                decoded_bytes[hdr.payload_len + 1u] ^= whitening_seq[(hdr.payload_len + 1u) % whitening_seq.size()];
+            }
 
             // === Stage 7: CRC verify ===
             if (hdr.has_crc && decoded_bytes.size() >= hdr.payload_len + 2u) {

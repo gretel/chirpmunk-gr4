@@ -75,7 +75,7 @@ DEFAULT_CONTACTS_DIR = (
 
 
 def _get_git_rev() -> str:
-    """Return the short git SHA of the gr4-lora repo, or ``"dev"``."""
+    """Return the short git SHA of the chirpmunk-gr4 repo, or ``"dev"``."""
     try:
         here = Path(__file__).resolve().parent
         result = subprocess.run(
@@ -382,6 +382,8 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as exc:
             parser.error(str(exc))
             return 2
+    elif typed is not None:
+        udp_host, udp_port = parse_host_port(typed.core.listen)
     else:
         udp_host, udp_port = "127.0.0.1", 5555
 

@@ -224,13 +224,15 @@ async def _run_async(  # pragma: no cover  # hw-only path
     output_path: str,
     attach: bool,
     host: str,
+    udp_port: int | None = None,
 ) -> int:
     matrix = list(MATRICES[matrix_name])
+    port = udp_port or TRX_PORT
 
     binary_proc = spawn_sdr_binary(
         binary,
         config_file=config_file,
-        udp_port=TRX_PORT,
+        udp_port=port,
         log_path="tmp/tx.log",
         attach=attach,
     )
@@ -270,7 +272,7 @@ async def _run_async(  # pragma: no cover  # hw-only path
         for i, point in enumerate(matrix):
             info(f"[{i + 1}/{len(matrix)}] {point_label(point)}")
             result = await _run_tx_point(
-                point, companion, sdr_pubkey, host=host, port=TRX_PORT
+                point, companion, sdr_pubkey, host=host, port=port
             )
             results.append(result)
             info(f"  => {result.crc_ok} pass, {result.crc_fail} fail")
@@ -307,6 +309,7 @@ def run(
     output_dir: str = "data/testing",
     attach: bool = False,
     host: str = "127.0.0.1",
+    udp_port: int | None = None,
 ) -> int:
     binary_path = binary or "./build/apps/lora_trx"
     label = label or f"tx_{matrix_name}"
@@ -325,6 +328,7 @@ def run(
             output_path=output_path,
             attach=attach,
             host=host,
+            udp_port=udp_port,
         )
     )
 

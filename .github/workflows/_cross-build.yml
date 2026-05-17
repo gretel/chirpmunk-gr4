@@ -56,6 +56,11 @@ on:
         required: false
         type: string
         default: '0.8.1'
+      libiio_version:
+        description: 'libiio release tag (e.g. v0.26 to match tezuka_fw). Empty disables IIO blocks.'
+        required: false
+        type: string
+        default: ''
       artifact_name:
         description: 'Name for the uploaded artifact (must be unique per caller run)'
         required: true
@@ -115,7 +120,7 @@ jobs:
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ${{ env.TOOLCHAIN_PARENT }}
-          key: bootlin-${{ inputs.arch_slug }}-${{ inputs.toolchain_name }}-soapy${{ inputs.soapy_sdr_version }}-xz
+          key: bootlin-${{ inputs.arch_slug }}-${{ inputs.toolchain_name }}-soapy${{ inputs.soapy_sdr_version }}-iio${{ inputs.libiio_version }}-xz
 
       - name: Download Bootlin toolchain
         if: steps.cache-toolchain.outputs.cache-hit != 'true'
@@ -174,6 +179,64 @@ jobs:
             || { echo "ERROR: SoapySDR CMake config missing"; exit 1; }
           echo "SoapySDR ${SOAPY_SDR_VERSION} present in sysroot"
 
+      - name: Cross-build libiio into toolchain sysroot
+        if: inputs.libiio_version != '' && steps.cache-toolchain.outputs.cache-hit != 'true'
+        env:
+          LIBIIO_VERSION: ${{ inputs.libiio_version }}
+        run: |
+          set -euo pipefail
+          SYSROOT="$TOOLCHAIN_ROOT/${TARGET_TRIPLE}/sysroot"
+          mkdir -p libiio-src
+          curl -fsSL -o libiio.tar.gz \
+            "https://github.com/analogdevicesinc/libiio/archive/refs/tags/${LIBIIO_VERSION}.tar.gz"
+          tar -xf libiio.tar.gz -C libiio-src --strip-components=1
+          rm libiio.tar.gz
+          # XML backend disabled to avoid pulling libxml2 into sysroot — TCP/IIOD
+          # is the canonical FISH Ball path (ip:HOST URI), USB skipped, mDNS off.
+          # Build libiio client library only — no IIO daemon (IIOD), no local/USB/serial
+          # backends. The FISH Ball uses IIO-over-network (ip:HOST URI), so only the
+          # network backend and a minimal client lib are needed. Disable IIOD to avoid
+          # its dependency chain (local backend → AIO/libaio → XML backend).
+          # libiio v0.26 unconditionally sets NEED_LIBXML2=1 when the network
+          # backend is enabled, but the Bootlin glibc sysroot doesn't ship
+          # libxml2 headers. The XML backend is only used for XML context file
+          # parsing — not needed for network-only IIO-over-IP. Patch it out.
+          sed -i 's/^[[:space:]]*set(NEED_LIBXML2 1)/  # set(NEED_LIBXML2 1)  # disabled for standalone network-only build/' libiio-src/CMakeLists.txt
+          cmake -S libiio-src -B libiio-build -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="${GITHUB_WORKSPACE}/${CMAKE_TOOLCHAIN_FILE_REL}" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="${SYSROOT}/usr" \
+            -DWITH_XML_BACKEND=OFF \
+            -DWITH_USB_BACKEND=OFF \
+            -DWITH_LOCAL_BACKEND=OFF \
+            -DWITH_NETWORK_BACKEND=ON \
+            -DWITH_SERIAL_BACKEND=OFF \
+            -DWITH_IIOD=OFF \
+            -DWITH_AIO=OFF \
+            -DWITH_ZSTD=OFF \
+            -DHAVE_DNS_SD=OFF \
+            -DENABLE_IPV6=ON \
+            -DCSHARP_BINDINGS=OFF \
+            -DPYTHON_BINDINGS=OFF \
+            -DWITH_DOC=OFF \
+            -DWITH_MAN=OFF \
+            -DWITH_TESTS=OFF \
+            -DWITH_EXAMPLES=OFF
+          cmake --build libiio-build -j2
+          cmake --install libiio-build
+          echo "--- libiio install verification ---"
+          ls -la "${SYSROOT}/usr/lib/libiio."* 2>/dev/null || true
+          rm -rf libiio-src libiio-build
+
+      - name: Verify libiio in sysroot
+        if: inputs.libiio_version != ''
+        run: |
+          set -euo pipefail
+          SYSROOT="$TOOLCHAIN_ROOT/${TARGET_TRIPLE}/sysroot"
+          test -f "${SYSROOT}/usr/lib/libiio.so" \
+            || { echo "ERROR: libiio.so missing from sysroot"; exit 1; }
+          echo "libiio ${{ inputs.libiio_version }} present in sysroot"
+
       - name: Restore ccache
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
@@ -192,7 +255,14 @@ jobs:
           ccache -z
 
       - name: Configure CMake (cross)
+        env:
+          LIBIIO_VERSION: ${{ inputs.libiio_version }}
+          PKG_CONFIG_PATH: ${{ github.workspace }}/toolchains/${{ inputs.toolchain_subdir }}/${{ inputs.toolchain_name }}/${{ inputs.target_triple }}/sysroot/usr/lib/pkgconfig
         run: |
+          IIO_FLAG=""
+          if [ -n "${LIBIIO_VERSION}" ]; then
+            IIO_FLAG="-DGR4_LORA_BUILD_IIO=ON"
+          fi
           cmake -S . -B build -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="${CMAKE_TOOLCHAIN_FILE_REL}" \
             -DCMAKE_BUILD_TYPE=Release \
@@ -204,6 +274,7 @@ jobs:
             -DGR_ENABLE_BLOCK_REGISTRY=OFF \
             -DINTERNAL_ENABLE_BLOCK_PLUGINS=OFF \
             -DGR_ENABLE_HTTP=OFF \
+            ${IIO_FLAG} \
             '-DCMAKE_CXX_FLAGS=-DGR_CACHE_LINE_SIZE=64'
 
       - name: Build gr-lora shared block library
@@ -226,18 +297,25 @@ jobs:
             qa_lora_sinks qa_lora_antenna_combiner qa_lora_multisf \
             qa_lora_lib_pipeline
 
-      - name: Build hardware applications (lora_trx, lora_scan)
+      - name: Build hardware applications (lora_trx, lora_scan, optionally iio_smoke)
+        env:
+          LIBIIO_VERSION: ${{ inputs.libiio_version }}
         run: |
           set -euo pipefail
           cmake --build build -j2 --target lora_trx lora_scan
           ls -la build/apps/lora_trx build/apps/lora_scan
           file build/apps/lora_trx build/apps/lora_scan
+          if [ -n "${LIBIIO_VERSION}" ]; then
+            cmake --build build -j2 --target iio_smoke || echo "iio_smoke not built (CLI11 not in sysroot, optional)"
+            ls -la build/apps/iio_smoke 2>/dev/null || true
+            file build/apps/iio_smoke 2>/dev/null || true
+          fi
 
       - name: Normalize RPATH on staged binaries
         run: |
           set -euo pipefail
           binaries=$(find build -type f \
-            \( -name 'qa_lora_*' -o -name 'lora_trx' -o -name 'lora_scan' \) \
+            \( -name 'qa_lora_*' -o -name 'lora_trx' -o -name 'lora_scan' -o -name 'iio_smoke' \) \
             -executable 2>/dev/null | sort -u || true)
           for f in $binaries; do
             [ -f "$f" ] || continue
@@ -267,7 +345,7 @@ jobs:
           find build -type f -name 'qa_lora_*' -not -name '*.o' -not -name '*.cmake' \
             -executable -print0 2>/dev/null | xargs -0 -I{} cp -v {} "$STAGE/bin/" || true
           # Hardware apps.
-          for app in lora_trx lora_scan; do
+          for app in lora_trx lora_scan iio_smoke; do
             if [ -x "build/apps/$app" ]; then
               cp -v "build/apps/$app" "$STAGE/bin/"
             fi

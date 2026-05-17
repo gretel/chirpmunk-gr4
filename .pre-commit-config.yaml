@@ -1,10 +1,14 @@
 # SPDX-License-Identifier: ISC
-# prek (Rust-rewrite of pre-commit) configuration for gr4-lora Python tooling.
+# prek (Rust-rewrite of pre-commit) configuration for gr4-lora.
 # Run with: prek run --all-files
 # Install hooks: prek install
 #
 # C++ side hooks (clang-format v18.1.8) come from gnuradio4/.pre-commit-config.yaml
 # pattern; add them here when ready to enforce on this repo's C++ sources.
+
+default_install_hook_types: [pre-commit, commit-msg]
+default_stages: [pre-commit]
+
 repos:
   - repo: https://github.com/astral-sh/uv-pre-commit
     rev: 0.11.8
@@ -20,11 +24,62 @@ repos:
         args: [--fix]
       - id: ruff-format
 
+  # Python type checking (basedpyright-langserver)
   - repo: local
     hooks:
       - id: pyright
         name: pyright
-        entry: uv run pyright
+        entry: /opt/homebrew/bin/basedpyright-langserver
         language: system
         types: [python]
         pass_filenames: false
+
+  # C++ language server
+  - repo: local
+    hooks:
+      - id: clangd
+        name: clangd
+        entry: /opt/homebrew/opt/llvm/bin/clangd
+        language: system
+        types: [c++, c]
+
+  # Universal file checks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-added-large-files
+        args: ['--maxkb=100']
+      - id: check-case-conflict
+      - id: check-merge-conflict
+      - id: mixed-line-ending
+        args: ['--fix=lf']
+      - id: check-symlinks
+      - id: destroyed-symlinks
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+      - id: check-xml
+
+  # Shell script linting
+  - repo: https://github.com/koalaman/shellcheck-precommit
+    rev: v0.9.0
+    hooks:
+      - id: shellcheck
+        types: [shell]
+        args: ['--severity=warning']
+
+  # Credentials detection
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: detect-private-key
+      - id: forbid-new-submodules
+
+  # Shebang enforcement
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: check-shebang-scripts-are-executable
+      - id: check-executables-have-shebangs

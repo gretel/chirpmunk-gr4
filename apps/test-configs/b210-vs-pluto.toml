@@ -1,0 +1,38 @@
+# Dual-DUT decode test: B220/UHD vs Pluto/IIO direct.
+#
+# Both SDRs receive the same reference-companion (Heltec V3 with Semtech
+# chip) ADVERT bursts at every matrix point. The harness drains both UDP
+# subscriptions in parallel and matches frames across DUTs via the
+# FNV-1a payload_hash field emitted by FrameSink.
+#
+# Run with:
+#   lora hwtest decode --test-config apps/test-configs/b210-vs-pluto.toml
+#
+# Per-DUT and head-to-head stats land in the JSON output's per_dut /
+# matchup blocks.
+
+[test]
+label      = "b210-vs-pluto"
+hypothesis = "Compare B220 UHD vs Pluto IIO direct on identical RF"
+
+[reference]
+# WiFi bridge to a Heltec V3 (or any meshcore-cli-speaking companion).
+# Use 'serial = "/dev/cu.usbserial-..."' for direct USB instead.
+tcp = "heltec.local:5000"
+
+[matrix]
+name = "sf_sweep"
+
+[[dut]]
+label       = "b220"
+binary      = "./build/apps/lora_trx"
+config_file = "apps/config-uhd.toml"
+host        = "127.0.0.1"
+port        = 5556
+
+[[dut]]
+label       = "pluto"
+binary      = "./build/apps/lora_trx"
+config_file = "apps/config-iio-local.toml"
+host        = "127.0.0.1"
+port        = 5566

@@ -522,6 +522,7 @@ def run(
             snr: float | None = phy.get("snr_db")
             sync_word: int = phy.get("sync_word", 0)
             seq: int = msg.get("seq", 0)
+            source: str = msg.get("source", "")
 
             key = frame_key(payload)
             wav_path = audio_dir / f"{key}.wav"
@@ -533,6 +534,7 @@ def run(
                 comment = (
                     f"SF={sf} BW={bw} CRC={crc_str} "
                     f"SNR={snr_str} seq={seq} sync=0x{sync_word:02X}"
+                    f"{' src=' + source if source else ''}"
                 )
                 keywords = f"payload_hex={payload.hex()} crc_ok={1 if crc_ok else 0}"
                 save_wav(

@@ -1,0 +1,73 @@
+# ── On-device decode via libiio (tezuka FISH Ball PlutoSDR) ────────────────
+
+[device]
+driver = "iio"       # IIO block path (IIOSource instead of SoapySource)
+param = "uri=local:" # IIO context URI (local: on-device, ip:HOST for remote)
+clock = "internal"
+
+[logging]
+level = "INFO"
+
+# ── Radio frontend ──────────────────────────────────────────────────────────
+
+[radio_868]
+freq = 869618000
+rx_channel = [0]
+rx_gain = 71           # higher gain for weak companion signal
+tx_gain = 89           # 0-89 dB (max for strongest TX loopback test signal)
+lo_offset = 0          # ignored by AD9361 IIO driver
+dc_offset_auto = false # Pluto has no HW DC correction
+
+# ── Transceiver (lora_trx) ──────────────────────────────────────────────────
+
+[trx]
+name = "Local IIO MeshCore 868 MHz"
+radio = "radio_868"
+rate = 2500000                      # 2.5 MS/s — Pluto IIO AD9361 valid rate (40 MHz / 16 = 2.5M) with integer OS: BW 62.5k=40, 125k=20, 250k=10
+enable_tx = true                    # TX via IIOSink (local PlutoSDR loopback for testing)
+use_aa_filter = false               # half-band FIR anti-alias on narrowband decimate
+tx_lo_powerdown = false             # keep TX LO powered between bursts for testing
+
+[trx.transmit]
+sf = 8
+bw = 62500
+cr = 8
+sync_word = 0x12
+preamble_len = 16
+
+[trx.receive]
+#bandwidths = [62500, 125000, 250000]
+bandwidths = [62500]
+
+[[trx.receive.chain]]
+label = "promisc"
+
+# SF8 chain with implicit header (no explicit header symbols).
+# Used by MeshCore companion on SF8 frames.
+[[trx.receive.chain]]
+label = "sf8-implicit"
+sf_set = [8]
+implicit_header = true
+implicit_cr = 1
+implicit_pay_len = 28
+
+[trx.network]
+udp_listen = "0.0.0.0"
+udp_port = 5556
+status_interval = 10
+lbt = false            # LBT disabled for local testing
+tx_queue_depth = 8     # allow up to 8 queued TX requests
+
+# ── Scanner mode (lora_scan) ────────────────────────────────────────────────
+
+[scan]
+radio = "radio_868"
+freq_start = 867000000
+freq_stop = 870000000
+l1_rate = 4000000      # 4 MS/s — IIO local can handle this
+master_clock = 8000000 # 2x L1 rate for AD9361 decimation headroom
+channel_bw = 62500
+
+[scan.network]
+udp_listen = "0.0.0.0"
+udp_port = 5557

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: ISC
 #
-# CMake toolchain file for cross-compiling gr4-lora for aarch64 (Raspberry Pi 4/5,
+# CMake toolchain file for cross-compiling chirpmunk-gr4 for aarch64 (Raspberry Pi 4/5,
 # generic ARMv8-A) using the Bootlin prebuilt toolchain.
 #
 # Expected environment variable:

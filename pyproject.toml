@@ -1,22 +1,22 @@
 [project]
-name = "gr4-lora"
+name = "chirpmunk-gr4"
 version = "0.2.0"
 description = "LoRa PHY for GNU Radio 4 — receiver software"
 requires-python = ">=3.14"
 dependencies = [
-    "cbor2>=6.0.0rc1",
-    "duckdb",
-    "pynacl",
-    "pycryptodome",
-    "segno",
-    "paho-mqtt",
-    "sounddevice",
-    "numpy>=2.4.2",
-    "pyserial>=3.5",
-    "setproctitle",
-    # meshcore-cli PyPI: companion-device control (TCP/serial) used by
-    # lora.hwtests harness to drive Heltec V3 during bench A/B.
-    "meshcore>=2.3",
+  "cbor2>=6.0.0rc1",
+  "duckdb",
+  "pynacl",
+  "pycryptodome",
+  "segno",
+  "paho-mqtt",
+  "sounddevice",
+  "numpy>=2.4.2",
+  "pyserial>=3.5",
+  "setproctitle",
+  # meshcore-cli PyPI: companion-device control (TCP/serial) used by
+  # lora.hwtests harness to drive Heltec V3 during bench A/B.
+  "meshcore>=2.3",
 ]
 
 [project.scripts]
@@ -24,13 +24,15 @@ lora = "lora.cli:main"
 
 [dependency-groups]
 dev = [
-    "ruff",
-    "pyright",
-    "pytest",
-    "pytest-asyncio",
-    "pytest-cov",
-    "pytest-timeout",
-    "hypothesis",
+  "ruff",
+  "pyright",
+  "pytest",
+  "pytest-asyncio",
+  "pytest-cov",
+  "pytest-timeout",
+  "hypothesis",
+  "matplotlib>=3.10.9",
+  "scipy>=1.17.1",
 ]
 
 [build-system]
@@ -49,7 +51,7 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 addopts = ["-q"]
 markers = [
-    "slow: marks tests as slow — opt-in via -m slow (the 1000-iter SIGHUP storm)",
+  "slow: marks tests as slow — opt-in via -m slow (the 1000-iter SIGHUP storm)",
 ]
 
 [tool.coverage.run]
@@ -58,35 +60,24 @@ markers = [
 # (lora.viz.mon, lora.daemon, etc.); excluding them from the direct
 # lora.core coverage measurement keeps the gate honest.
 omit = [
-    "scripts/src/lora/core/formatters.py",
-    "scripts/src/lora/core/cbor_stream.py",
-    "scripts/src/lora/core/logging.py",
-    "scripts/src/lora/core/meshcore_uri.py",
+  "scripts/src/lora/core/formatters.py",
+  "scripts/src/lora/core/cbor_stream.py",
+  "scripts/src/lora/core/logging.py",
+  "scripts/src/lora/core/meshcore_uri.py",
 ]
 
 [tool.ruff]
 src = ["scripts/src"]
 target-version = "py314"
-extend-exclude = [
-    "gnuradio4",
-    "build",
-    "build_*",
-    ".venv",
-]
+extend-exclude = ["gnuradio4", "build", "build_*", ".venv"]
 
 [tool.ruff.lint]
-extend-select = ["I"]   # isort
+extend-select = ["I"] # isort
 
 [tool.pyright]
 include = ["scripts/src", "tests"]
 extraPaths = ["scripts/src"]
-exclude = [
-    "gnuradio4",
-    "build",
-    "build_*",
-    ".venv",
-    "**/__pycache__",
-]
+exclude = ["gnuradio4", "build", "build_*", ".venv", "**/__pycache__"]
 venvPath = "."
 venv = ".venv"
 pythonVersion = "3.14"

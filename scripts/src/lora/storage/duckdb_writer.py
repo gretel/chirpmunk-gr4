@@ -55,7 +55,7 @@ from lora.storage._lora_frame_row import (
     parse_ts,
     status_row,
 )
-from lora.storage.schema import apply_schema
+from lora.storage.schema import apply_schema, archive_if_pre_source_schema
 
 log = logging.getLogger("lora.storage")
 
@@ -116,6 +116,7 @@ class StorageConfig:
     """Tuning knobs for :class:`DuckDBWriter`."""
 
     db_path: Path
+    backend: str = "duckdb"
     batch_rows: int = 256
     batch_ms: int = 1000
     queue_depth: int = 10_000
@@ -165,7 +166,7 @@ _INSERT_LORA_FRAMES: Final[str] = (
 _INSERT_STATUS: Final[str] = (
     "INSERT INTO status_heartbeats "
     "(ts, rx_gain, tx_gain, frames_total, frames_crc_ok, frames_crc_fail, "
-    "rx_overflows, writer_dropped) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+    "rx_overflows, writer_dropped, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
 )
 
 _INSERT_MULTISF_DETECT: Final[str] = (
@@ -240,6 +241,10 @@ class DuckDBWriter:
 
         def _bootstrap() -> None:
             try:
+                # Schema-bump policy: archive any DB that predates
+                # status_heartbeats.source (SCHEMA_VERSION 2). No-op when the
+                # file is fresh, locked, or already current.
+                archive_if_pre_source_schema(self._config.db_path)
                 con = duckdb.connect(str(self._config.db_path))
                 apply_schema(con)
             except BaseException as exc:  # pragma: no cover - propagated
@@ -295,10 +300,10 @@ class DuckDBWriter:
     def put(self, frame: LoraFrame) -> bool:
         return self._enqueue("lora_frame", lora_frame_row(frame))
 
-    def put_status(self, status: Status) -> bool:
+    def put_status(self, status: Status, source: str | None = None) -> bool:
         with self._stats_lock:
             dropped = self._stats.dropped
-        return self._enqueue("status", status_row(status, dropped))
+        return self._enqueue("status", status_row(status, dropped, source))
 
     def put_multisf_detect(self, e: MultisfDetect, source: str | None = None) -> bool:
         return self._enqueue("multisf_detect", (parse_ts(e.ts), e.sf, e.bin, source))

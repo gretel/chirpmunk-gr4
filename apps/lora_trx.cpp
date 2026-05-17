@@ -58,6 +58,9 @@
 #include "tx_worker.hpp"
 #include "udp_state.hpp"
 #include <gnuradio-4.0/sdr/SoapySink.hpp>
+#if GR4_LORA_HAS_IIO
+#include <gnuradio-4.0/iio/IIOSink.hpp>
+#endif
 
 #include <gnuradio-4.0/lora/FrameSink.hpp>
 #include <gnuradio-4.0/lora/TxQueueSource.hpp>
@@ -110,11 +113,6 @@ std::unique_ptr<gr::scheduler::Simple<gr::scheduler::ExecutionPolicy::singleThre
         return nullptr;
     }
 
-    if (cfg.tx_channel >= nTxChannels) {
-        gr::lora::log_ts("error", "lora_trx", "tx_channel %u but device has only %zu TX channel(s)", cfg.tx_channel, nTxChannels);
-        return nullptr;
-    }
-
     gr::Graph graph;
     graph.emplaceBlock<gr::lora::TxQueueSource>();
 
@@ -141,6 +139,42 @@ std::unique_ptr<gr::scheduler::Simple<gr::scheduler::ExecutionPolicy::singleThre
 
     gr::lora::TxQueueSource* src_ptr = nullptr;
 
+#if GR4_LORA_HAS_IIO
+    if (cfg.device == "iio") {
+        // In 2R2T mode, the TX DMA expects 4 channels (voltage0..voltage3,
+        // 8 bytes/scan).  IIOSink<cf32, 2> maps voltage0/voltage1 to
+        // in0 and voltage2/voltage3 to in1 (4 bytes/scan each).
+        std::string uri = cfg.device_param;
+        if (uri.starts_with("uri=")) {
+            uri = uri.substr(4);
+        }
+
+        auto iio_props = gr::property_map{
+            {"uri", uri},
+            {"sample_rate", static_cast<float>(cfg.rate)},
+            {"center_frequency", cfg.freq},
+            {"bandwidth", static_cast<double>(cfg.bw)},
+            {"tx_gain", cfg.gain_tx},
+            {"buffer_size", gr::Size_t{32768U}},
+            {"timeout_ms", gr::Size_t{1000U}},
+            {"tx_lo_powerdown", cfg.tx_lo_powerdown},
+        };
+        if (cfg.tx_channel == 1) {
+            iio_props["tx_chains"] = std::vector<std::string>{"B", "A"};
+        }
+        auto& sink = graph.emplaceBlock<gr::incubator::iio::IIOSink<cf32>>(std::move(iio_props));
+
+        src_ptr = find_tx_queue_source();
+        if (!src_ptr) {
+            gr::lora::log_ts("error", "lora_trx", "TxQueueSource not found in TX graph");
+            return nullptr;
+        }
+        auto& src = *src_ptr;
+
+        // Single-port IIOSink: out0 (IQ) → in
+        std::ignore = graph.connect(src, "out0"s, sink, "in"s);
+    } else
+#endif
     if (dualTx) {
         auto& sink = graph.emplaceBlock<gr::blocks::sdr::SoapyDualSink<cf32>>({
             {"device", cfg.device},
@@ -174,6 +208,10 @@ std::unique_ptr<gr::scheduler::Simple<gr::scheduler::ExecutionPolicy::singleThre
             std::ignore = graph.connect(src, "out0"s, sink, "in#1"s);
         }
     } else {
+        if (cfg.tx_channel >= nTxChannels) {
+            gr::lora::log_ts("error", "lora_trx", "tx_channel %u but device has only %zu TX channel(s)", cfg.tx_channel, nTxChannels);
+            return nullptr;
+        }
         auto& sink = graph.emplaceBlock<gr::blocks::sdr::SoapySimpleSink<cf32>>({
             {"device", cfg.device},
             {"device_parameter", cfg.device_param},
@@ -184,7 +222,7 @@ std::unique_ptr<gr::scheduler::Simple<gr::scheduler::ExecutionPolicy::singleThre
             {"channel_offset", static_cast<gr::Size_t>(cfg.tx_channel)},
             {"tx_antennae", cfg.tx_antenna.empty() ? std::vector<std::string>{} : std::vector<std::string>{cfg.tx_antenna}},
             {"clock_source", cfg.clock},
-            {"master_clock_rate", 0.0},
+            {"master_clock_rate", 24.0e6},
             {"timed_tx", true},
             {"wait_burst_ack", true},
             {"max_underflow_count", gr::Size_t{0}},
@@ -281,7 +319,7 @@ private:
 
 // Runtime PHY reconfiguration (the old `lora_config` CBOR handler) was
 // removed. PHY parameters (sf / bw / sync_word / preamble / freq /
-// rx_gain) are configuration-only now: edit apps/config.toml and restart
+// rx_gain) are configuration-only now: edit config-uhd.toml and restart
 // lora_trx.  The previous API was designed for a single-chain world and
 // its broadcast-to-all-decoders semantics are incompatible with the
 // current multi-chain + promiscuous + sf_set architecture (changing one
@@ -524,11 +562,34 @@ int main(int argc, char* argv[]) {
 
     // --- Build and start RX graph in a background thread ---
     gr::Graph                rx_graph;
-    auto                     rx_telemetry = [&udp](const gr::property_map& evt) { udp.broadcast_all(gr::lora::telemetry::encode(evt)); };
+    // Decorate every RX telemetry event with the SDR's hardware serial under
+    // the "device" key. Matches FrameSink::buildFrameCbor() and
+    // build_status_cbor() conventions, so multi-source consumers (lora_agg,
+    // lora_duckdb) can attribute detect/sync/frame events to the originating
+    // radio when several lora_trx instances share a UDP fanout.
+    auto                     rx_telemetry = [&udp, dev = device_serial](const gr::property_map& evt) {
+        if (dev.empty()) {
+            udp.broadcast_all(gr::lora::telemetry::encode(evt));
+            return;
+        }
+        gr::property_map decorated = evt;
+        decorated.try_emplace("device", std::pmr::string(dev));
+        udp.broadcast_all(gr::lora::telemetry::encode(decorated));
+    };
     std::atomic<gr::Size_t>* overflow_ptr = build_rx_graph(rx_graph, cfg, frame_callback, spectrum, &channel_busy, std::move(rx_telemetry));
 
-    gr::scheduler::Simple<gr::scheduler::ExecutionPolicy::singleThreadedBlocking> rx_sched;
-    rx_sched.timeout_inactivity_count = 10U; // log after 10s of no progress (SoapySource IO thread drives progress)
+    gr::scheduler::Simple<gr::scheduler::ExecutionPolicy::singleThreaded> rx_sched;
+    // singleThreaded (vs singleThreadedBlocking) ensures the scheduler polls
+    // continuously rather than sleeping on progress notifications.  Even with
+    // non_blocking=false (blocking refill), singleThreadedBlocking can stall
+    // when no upstream samples arrive between refill() calls — the scheduler
+    // sleeps instead of re-polling the IIO buffer.
+    //
+    // The watchdog thread (always active) uses timeout_inactivity_count as its
+    // warning threshold.  Set high values here to suppress cosmetic 'trigger
+    // watchdog update' noise during normal polling gaps.
+    rx_sched.watchdog_timeout = 60000U;          // check progress every 60s
+    rx_sched.timeout_inactivity_count = 100U;    // warn after 100 missed checks (100 min)
     // NB: a `watchdog_max_warnings` knob exists on newer gnuradio4 master
     // (post-4ab98c4) — when this submodule is bumped, set it here so a
     // multi-minute pipeline stall (wedged libusb, SoapyUHD reactivate
@@ -554,8 +615,9 @@ int main(int argc, char* argv[]) {
     set_device_serial(rx_sched.blocks(), device_serial);
 
     // TX blocks intentionally not tracked for runtime reconfiguration —
-    // tx_gain / tx_freq are baked at graph build from config.toml.
-    gr::lora::log_ts("debug", "lora_trx", "rx graph   %zu MultiSfDecoder (SF7-12), soapy=%s", rx_blocks.multisf_decoders.size(), rx_blocks.soapy_source ? "yes" : "no");
+    // tx_gain / tx_freq are baked at graph build from config-uhd.toml.
+    auto  iio_blk     = lora_graph::find_iio_source(rx_sched.blocks());
+    gr::lora::log_ts("debug", "lora_trx", "rx graph   %zu MultiSfDecoder, soapy=%s iio=%s", rx_blocks.multisf_decoders.size(), rx_blocks.soapy_source ? "yes" : "no", iio_blk ? "yes" : "no");
 
     // Launch RX scheduler FIRST so its SoapySource::findOrCreate registers
     // on the DeviceRegistry before TX's registerActivation fires.  This
@@ -671,11 +733,11 @@ int main(int argc, char* argv[]) {
                 }
                 // Spectrum FFT: compute and broadcast if new data available
                 if (spectrum->compute()) {
-                    auto spec_msg = build_spectrum_cbor(*spectrum, "spectrum");
+                    auto spec_msg = build_spectrum_cbor(*spectrum, "spectrum", device_serial);
                     udp.broadcast_all(spec_msg);
                 }
                 if (tx_spectrum->compute()) {
-                    auto spec_msg = build_spectrum_cbor(*tx_spectrum, "spectrum_tx");
+                    auto spec_msg = build_spectrum_cbor(*tx_spectrum, "spectrum_tx", device_serial);
                     udp.broadcast_all(spec_msg);
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -705,6 +767,9 @@ int main(int argc, char* argv[]) {
                 } else if (!tx_queue.push({msg, sender})) {
                     uint64_t seq = gr::lora::cbor::get_uint_or(msg, "seq", 0);
                     send_tx_nack(udp, sender, seq, "tx_queue_full");
+                } else {
+                    uint64_t seq = gr::lora::cbor::get_uint_or(msg, "seq", 0);
+                    gr::lora::log_ts("debug", "lora_trx", "TX request queued (seq=%" PRIu64 ")", seq);
                 }
             } else if (type == "lora_config") {
                 // Runtime PHY reconfig was removed — config is startup-only.
@@ -719,7 +784,7 @@ int main(int argc, char* argv[]) {
                 udp.sendTo(nack, sender);
                 gr::lora::log_ts("warn ", "lora_trx",
                     "lora_config: runtime PHY reconfig removed; "
-                    "edit config.toml and restart to change SF/BW/sync/freq/gain");
+                    "edit config-uhd.toml and restart to change SF/BW/sync/freq/gain");
             } else if (type == "subscribe") {
                 // Optional sync_word filter — array of uint16 or single uint
                 std::vector<uint16_t> filter;

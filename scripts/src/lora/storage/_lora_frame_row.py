@@ -208,12 +208,18 @@ def lora_frame_row(frame: LoraFrame) -> tuple[Any, ...]:
     return row
 
 
-def status_row(status: Status, writer_dropped: int) -> tuple[Any, ...]:
+def status_row(
+    status: Status, writer_dropped: int, source: str | None = None
+) -> tuple[Any, ...]:
     """Flatten a :class:`Status` heartbeat into a row tuple.
 
     ``writer_dropped`` is the writer thread's local drop counter
     (bounded-queue overflow); it is not part of the upstream Status
     schema and is supplied by the caller (the writer itself).
+
+    ``source`` is the upstream's logical name (from ``[[core.upstream]]``
+    config) that the daemon attributes to incoming events. Mirrors the
+    ``source`` column on every other telemetry table.
     """
     return (
         parse_ts(status.ts),
@@ -224,4 +230,5 @@ def status_row(status: Status, writer_dropped: int) -> tuple[Any, ...]:
         status.frames.crc_fail,
         status.rx_overflows,
         writer_dropped,
+        source,
     )

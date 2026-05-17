@@ -67,7 +67,7 @@ struct ScanStats {
 // ─── CLI ──────────────────────────────────────────────────────────────────────
 
 static int parse_scan_args(int argc, char** argv, std::string& config_path, std::string& log_level, bool& cbor_out) {
-    config_path = "apps/config.toml";
+    config_path = "apps/config-uhd.toml";
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--config" && i + 1 < argc) {
@@ -93,7 +93,7 @@ static int parse_scan_args(int argc, char** argv, std::string& config_path, std:
             std::fprintf(stderr, "Usage: lora_scan [options]\n\n"
                                  "LoRa spectral scanner: sweep channels and detect chirp activity.\n\n"
                                  "Options:\n"
-                                 "  --config <file>       TOML configuration file (default: apps/config.toml)\n"
+                                 "  --config <file>       TOML configuration file (default: apps/config-uhd.toml)\n"
                                  "  --cbor                Emit CBOR frames on stdout (pipe to lora_spectrum.py)\n"
                                  "  --log-level <level>   Log level: DEBUG, INFO, WARNING, ERROR\n"
                                  "  --version             Show version and exit\n"
@@ -118,12 +118,20 @@ static std::vector<double> makeChannelList(double freqStart, double freqStop, do
 
 // ─── Orchestrator helpers ────────────────────────────────────────────────────
 
-/// Retune the SoapySource frequency via GR4 settings (no stream restart).
+/// Retune the source frequency via GR4 settings (no stream restart).
 /// The graph keeps streaming during the settle delay -- no overflow.
+/// Supports both SoapySource (key="frequency") and IIOSource (key="center_frequency").
 static void retune_source(std::shared_ptr<gr::BlockModel>& source, double freq, int settleMs) {
+    if (!source) {
+        return;
+    }
     gr::property_map props;
-    props["frequency"] = std::vector<double>{freq};
-    std::ignore        = source->settings().set(props);
+    if (source->typeName().find("IIOSource") != std::string_view::npos) {
+        props["center_frequency"] = freq;
+    } else {
+        props["frequency"] = std::vector<double>{freq};
+    }
+    std::ignore = source->settings().set(props);
     std::this_thread::sleep_for(std::chrono::milliseconds(settleMs));
 }
 
@@ -590,8 +598,12 @@ static InterleavedResult interleavedSweep(ScanGraph& sg, std::shared_ptr<gr::Blo
 // ─── CBOR output ──────────────────────────────────────────────────────────────
 
 // Shared output state — set in main(), used by all emitters.
-static UdpState* g_udp         = nullptr;
-static bool      g_cbor_stdout = false;
+static UdpState*  g_udp           = nullptr;
+static bool       g_cbor_stdout   = false;
+// Set in streaming_main / tuning main from hw_info.serial. Empty when SDR
+// enumerate returned no serial (sim devices, soapy-loopback). Decorates
+// every scan_* event so multi-source consumers can attribute.
+static std::string g_device_serial;
 
 static void sendCbor(const std::vector<uint8_t>& buf) {
     if (g_udp) {
@@ -603,9 +615,23 @@ static void sendCbor(const std::vector<uint8_t>& buf) {
     }
 }
 
+// Wrap telemetry::beginEvent and inject the device serial, so consumers can
+// attribute scan_* events to a specific radio when several lora_scan
+// instances share a UDP fanout. Mirrors FrameSink::buildFrameCbor() and
+// build_status_cbor() — "device" carries the hardware serial.
+static std::vector<uint8_t> beginScanEvent(std::string_view type, std::size_t nBodyFields) {
+    namespace cb         = gr::lora::cbor;
+    const bool hasDevice = !g_device_serial.empty();
+    auto       buf       = gr::lora::telemetry::beginEvent(type, nBodyFields + (hasDevice ? 1U : 0U));
+    if (hasDevice) {
+        cb::kv_text(buf, "device", g_device_serial);
+    }
+    return buf;
+}
+
 static void emitSpectrumCbor(const std::vector<double>& channels, const std::vector<double>& energy, const std::vector<std::size_t>& hotIndices, const std::vector<DirectCadResult>& detections, uint32_t sweepCount) {
     namespace cb = gr::lora::cbor;
-    auto buf     = gr::lora::telemetry::beginEvent("scan_spectrum", 7);
+    auto buf     = beginScanEvent("scan_spectrum", 7);
     cb::kv_uint(buf, "sweep", sweepCount);
     cb::kv_uint(buf, "freq_min", static_cast<uint64_t>(channels.front()));
 
@@ -655,7 +681,7 @@ static void emitSpectrumCbor(const std::vector<double>& channels, const std::vec
 
 static void emitStatusCbor(const ScanSetConfig& cfg, const ScanStats& stats, const std::string& mode) {
     namespace cb = gr::lora::cbor;
-    auto buf     = gr::lora::telemetry::beginEvent("scan_status", 6);
+    auto buf     = beginScanEvent("scan_status", 6);
     cb::kv_text(buf, "mode", mode);
     cb::kv_uint(buf, "sweeps", stats.sweeps);
     cb::kv_uint(buf, "detections", stats.total_detections);
@@ -674,14 +700,14 @@ static void emitStatusCbor(const ScanSetConfig& cfg, const ScanStats& stats, con
 
 static void emitSweepStartCbor(uint32_t sweep) {
     namespace cb = gr::lora::cbor;
-    auto buf     = gr::lora::telemetry::beginEvent("scan_sweep_start", 1);
+    auto buf     = beginScanEvent("scan_sweep_start", 1);
     cb::kv_uint(buf, "sweep", sweep);
     sendCbor(buf);
 }
 
 static void emitSweepEndCbor(uint32_t sweep, uint32_t durationMs, uint32_t l1Snapshots, uint32_t l2Probes, uint32_t hotCount, uint32_t detections, uint32_t overflows) {
     namespace cb = gr::lora::cbor;
-    auto buf     = gr::lora::telemetry::beginEvent("scan_sweep_end", 7);
+    auto buf     = beginScanEvent("scan_sweep_end", 7);
     cb::kv_uint(buf, "sweep", sweep);
     cb::kv_uint(buf, "duration_ms", durationMs);
     cb::kv_uint(buf, "l1_snapshots", l1Snapshots);
@@ -694,7 +720,7 @@ static void emitSweepEndCbor(uint32_t sweep, uint32_t durationMs, uint32_t l1Sna
 
 static void emitL2ProbeCbor(uint32_t sweep, double freq, uint32_t durationMs, const std::vector<L2BwResult>& results) {
     namespace cb = gr::lora::cbor;
-    auto buf     = gr::lora::telemetry::beginEvent("scan_l2_probe", 4);
+    auto buf     = beginScanEvent("scan_l2_probe", 4);
     cb::kv_uint(buf, "sweep", sweep);
     cb::kv_uint(buf, "freq", static_cast<uint64_t>(freq));
     cb::kv_uint(buf, "duration_ms", durationMs);
@@ -712,7 +738,7 @@ static void emitL2ProbeCbor(uint32_t sweep, double freq, uint32_t durationMs, co
 
 static void emitRetuneCbor(uint32_t sweep, double freq, const char* reason) {
     namespace cb = gr::lora::cbor;
-    auto buf     = gr::lora::telemetry::beginEvent("scan_retune", 3);
+    auto buf     = beginScanEvent("scan_retune", 3);
     cb::kv_uint(buf, "sweep", sweep);
     cb::kv_uint(buf, "freq", static_cast<uint64_t>(freq));
     cb::kv_text(buf, "reason", reason);
@@ -721,7 +747,7 @@ static void emitRetuneCbor(uint32_t sweep, double freq, const char* reason) {
 
 static void emitOverflowCbor(uint32_t sweep, uint64_t count) {
     namespace cb = gr::lora::cbor;
-    auto buf     = gr::lora::telemetry::beginEvent("scan_overflow", 2);
+    auto buf     = beginScanEvent("scan_overflow", 2);
     cb::kv_uint(buf, "sweep", sweep);
     cb::kv_uint(buf, "count", count);
     sendCbor(buf);
@@ -833,7 +859,7 @@ static void emitDataSetCbor(const gr::DataSet<float>& ds, uint64_t overflows = 0
         float freqMin  = (!ds.axis_values.empty() && !ds.axis_values[0].empty()) ? ds.axis_values[0][0] : 0.f;
         float freqStep = (!ds.axis_values.empty() && ds.axis_values[0].size() > 1) ? ds.axis_values[0][1] - ds.axis_values[0][0] : 62500.f;
 
-        auto buf = gr::lora::telemetry::beginEvent("scan_spectrum", 7);
+        auto buf = beginScanEvent("scan_spectrum", 7);
         cb::kv_uint(buf, "sweep", static_cast<uint64_t>(getInt("sweep")));
         cb::kv_uint(buf, "freq_min", static_cast<uint64_t>(freqMin));
         cb::kv_uint(buf, "freq_step", static_cast<uint64_t>(freqStep));
@@ -865,7 +891,7 @@ static void emitDataSetCbor(const gr::DataSet<float>& ds, uint64_t overflows = 0
 
     // --- Emit scan_sweep_end CBOR (updates header in lora_spectrum.py + lora_perf.py) ---
     {
-        auto buf = gr::lora::telemetry::beginEvent("scan_sweep_end", 6);
+        auto buf = beginScanEvent("scan_sweep_end", 6);
         cb::kv_uint(buf, "sweep", static_cast<uint64_t>(getInt("sweep")));
         cb::kv_uint(buf, "duration_ms", static_cast<uint64_t>(getInt("duration_ms")));
         cb::kv_uint(buf, "detections", static_cast<uint64_t>(nDet));
@@ -900,7 +926,8 @@ static int streaming_main(ScanSetConfig& cfg) {
         dup2(STDERR_FILENO, STDOUT_FILENO);
     }
 
-    auto hw_info = lora_apps::log_hardware_info("lora_scan", cfg.device, cfg.device_param);
+    auto hw_info    = lora_apps::log_hardware_info("lora_scan", cfg.device, cfg.device_param);
+    g_device_serial = hw_info.serial;
 
     gr::thread_pool::Manager::defaultCpuPool()->setThreadBounds(1, 1);
 
@@ -917,7 +944,7 @@ static int streaming_main(ScanSetConfig& cfg) {
     }
 
     // Find blocks post-exchange (original graph references are dangling)
-    auto  soapy_source = lora_graph::find_soapy_source(sched.blocks());
+    auto  source_block = lora_graph::find_source_block(sched.blocks());
     auto* scanSink     = lora_graph::find_scan_sink(sched.blocks());
     if (!scanSink) {
         gr::lora::log_ts("error", "lora_scan", "ScanSink not found in graph");
@@ -929,15 +956,8 @@ static int streaming_main(ScanSetConfig& cfg) {
     // scheduler thread, preventing overflow cascades from CBOR emission.
     CborHandoff handoff;
 
-    scanSink->_onDataSet = [&handoff, &soapy_source](const gr::DataSet<float>& ds) {
-        uint64_t ovf = 0;
-        if (soapy_source) {
-            using SoapyType = gr::blocks::sdr::SoapySource<cf32, 1UZ>;
-            auto* wrapper   = dynamic_cast<gr::BlockWrapper<SoapyType>*>(soapy_source.get());
-            if (wrapper) {
-                ovf = wrapper->blockRef()._overflowCount.load(std::memory_order_relaxed);
-            }
-        }
+    scanSink->_onDataSet = [&handoff, &source_block](const gr::DataSet<float>& ds) {
+        uint64_t ovf = lora_graph::read_source_overflow(source_block);
         {
             std::lock_guard<std::mutex> lock(handoff.mtx);
             handoff.ds        = ds;
@@ -999,16 +1019,12 @@ static int streaming_main(ScanSetConfig& cfg) {
 
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
-        if (soapy_source) {
-            using SoapyType = gr::blocks::sdr::SoapySource<cf32, 1UZ>;
-            auto* wrapper   = dynamic_cast<gr::BlockWrapper<SoapyType>*>(soapy_source.get());
-            if (wrapper) {
-                uint64_t ovf = wrapper->blockRef()._overflowCount.load(std::memory_order_relaxed);
-                if (ovf != lastOvf && (ovf == 1 || ovf % 50 == 0)) {
-                    gr::lora::log_ts("warn ", "lora_scan", "overflow count: %llu", static_cast<unsigned long long>(ovf));
-                }
-                lastOvf = ovf;
+        {
+            uint64_t ovf = lora_graph::read_source_overflow(source_block);
+            if (ovf != lastOvf && (ovf == 1 || ovf % 50 == 0)) {
+                gr::lora::log_ts("warn ", "lora_scan", "overflow count: %llu", static_cast<unsigned long long>(ovf));
             }
+            lastOvf = ovf;
         }
     }
 
@@ -1094,14 +1110,15 @@ int main(int argc, char** argv) {
             dup2(STDERR_FILENO, STDOUT_FILENO);
         }
 
-        auto hw_info = lora_apps::log_hardware_info("lora_scan", cfg.device, cfg.device_param);
+        auto hw_info    = lora_apps::log_hardware_info("lora_scan", cfg.device, cfg.device_param);
+        g_device_serial = hw_info.serial;
 
         // Shrink thread pool — singleThreadedBlocking doesn't use it
         gr::thread_pool::Manager::defaultCpuPool()->setThreadBounds(1, 1);
 
         // Build GR4 graph
         gr::Graph graph;
-        auto      sg = lora_graph::build_scan_graph(graph, cfg, channels);
+        auto sg = lora_graph::build_scan_graph(graph, cfg, channels);
 
         gr::scheduler::Simple<gr::scheduler::ExecutionPolicy::singleThreadedBlocking> sched;
         sched.timeout_inactivity_count = 10U; // SoapySource IO thread drives progress; log after 10s stall
@@ -1111,10 +1128,11 @@ int main(int argc, char** argv) {
             return 1;
         }
 
-        // Find SoapySource for runtime retune (after exchange, original refs are dangling)
-        auto soapy_source = lora_graph::find_soapy_source(sched.blocks());
-        if (!soapy_source) {
-            gr::lora::log_ts("error", "lora_scan", "SoapySource not found in graph");
+        // Find source block for runtime retune + overflow detection
+        // (after exchange, original refs are dangling)
+        auto source_block = lora_graph::find_source_block(sched.blocks());
+        if (!source_block) {
+            gr::lora::log_ts("error", "lora_scan", "no source block found in graph");
             return 1;
         }
 
@@ -1146,7 +1164,7 @@ int main(int argc, char** argv) {
             std::fprintf(out, "%s\n", std::string(38, '-').c_str());
 
             while (!g_stop.load(std::memory_order_relaxed) && !sched_done.load(std::memory_order_relaxed)) {
-                const auto               l1 = layer1Scan(sg.spectrum, soapy_source, channels, cfg);
+                const auto               l1 = layer1Scan(sg.spectrum, source_block, channels, cfg);
                 std::vector<std::size_t> hotIndices;
                 for (std::size_t idx = 0; idx < channels.size(); ++idx) {
                     const bool hot = std::ranges::find(l1.hot_idx, static_cast<int>(idx)) != l1.hot_idx.end();
@@ -1184,7 +1202,7 @@ int main(int argc, char** argv) {
         if (scanRange > usableBw) {
             gr::lora::log_ts("error", "lora_scan",
                 "scan range %.1f MHz exceeds usable BW %.1f MHz at L1 rate %.1f MS/s "
-                "-- increase [scan] l1_rate or narrow freq_start/freq_stop in config.toml",
+                "-- increase [scan] l1_rate or narrow freq_start/freq_stop in config-uhd.toml",
                 scanRange / 1.0e6, usableBw / 1.0e6, cfg.l1_rate / 1.0e6);
             sched.requestStop();
             sched_thread.join();
@@ -1228,17 +1246,10 @@ int main(int argc, char** argv) {
         auto                lastCborStatus = std::chrono::steady_clock::now();
         double              avgSweepMs     = 0.0;
 
-        // Overflow polling: typed access to SoapySource
+        // Overflow polling: typed access to source (Soapy or IIO)
         uint64_t lastOverflowCount = 0;
         auto     checkOverflows    = [&](uint32_t sweep) {
-            // Access overflow count via the typed block inside the wrapper.
-            // SoapySource<cf32, 1>::_overflowCount is atomic and cross-thread safe.
-            using SoapyType = gr::blocks::sdr::SoapySource<std::complex<float>, 1UZ>;
-            auto* wrapper   = dynamic_cast<gr::BlockWrapper<SoapyType>*>(soapy_source.get());
-            if (!wrapper) {
-                return;
-            }
-            const uint64_t current = wrapper->blockRef()._overflowCount.load(std::memory_order_relaxed);
+            const uint64_t current = lora_graph::read_source_overflow(source_block);
             if (current > lastOverflowCount) {
                 stats.overflows = static_cast<uint32_t>(current);
                 emitOverflowCbor(sweep, current);
@@ -1274,7 +1285,7 @@ int main(int argc, char** argv) {
                 checkOverflows(sweepNum);
             };
 
-            const auto bResult = interleavedSweep(sg, soapy_source, channels, cfg, g_stop, callbacks);
+            const auto bResult = interleavedSweep(sg, source_block, channels, cfg, g_stop, callbacks);
             for (const auto& det : bResult.detections) {
                 reportDetection(det);
             }

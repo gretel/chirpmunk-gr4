@@ -91,7 +91,11 @@ struct HardwareInfo {
 /// strictly out-of-band of the hardware.
 inline HardwareInfo log_hardware_info(const char* app_name, const std::string& device, const std::string& device_param) {
     std::size_t nTx = 1, nRx = 1;
-    if (device == "uhd" && device_param.find("type=b2") != std::string::npos) {
+    if (device == "iio") {
+        // Single RX/TX (Pluto / AD9361 direct IIO)
+        nTx = 1;
+        nRx = 1;
+    } else if (device == "uhd" && device_param.find("type=b2") != std::string::npos) {
         nTx = 2;
         nRx = 4;
     }

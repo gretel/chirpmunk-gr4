@@ -26,6 +26,19 @@ from lora.hwtests.harness import (
 )
 from lora.hwtests.matrix import ConfigPoint
 from lora.hwtests.scan_test import _run_scan_point
+from lora.hwtests.test_config import DutConfig
+
+
+def _solo_collectors(
+    collector: EventCollector, label: str = "default"
+) -> list[tuple[DutConfig, EventCollector]]:
+    """Wrap a single EventCollector in the multi-DUT collectors list shape."""
+    return [
+        (
+            DutConfig(label=label, binary="b", config_file="c", port=0),
+            collector,
+        )
+    ]
 
 
 class TestSpawnAttachReturnsNone:
@@ -82,7 +95,7 @@ class TestRunDecodePoint:
                 p = ConfigPoint(sf=8, bw=62500, freq_mhz=869.618)
                 # Compress flush_s by stubbing lora_airtime_s? We just
                 # rely on monkeypatched time.sleep above.
-                result = _run_decode_point(p, comp, collector)
+                result = _run_decode_point(p, comp, _solo_collectors(collector))
             finally:
                 collector.stop()
         finally:
@@ -104,7 +117,7 @@ class TestRunDecodePoint:
             collector.start()
             try:
                 p = ConfigPoint(sf=8, bw=62500, freq_mhz=869.618)
-                result = _run_decode_point(p, comp, collector)
+                result = _run_decode_point(p, comp, _solo_collectors(collector))
             finally:
                 collector.stop()
         finally:

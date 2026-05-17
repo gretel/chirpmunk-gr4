@@ -49,7 +49,7 @@ inline constexpr uint32_t SPS          = N * OS_FACTOR;
 inline std::vector<VectorConfig> allConfigs() {
     std::vector<VectorConfig> configs;
     for (auto sf : {uint8_t(7), uint8_t(8), uint8_t(9), uint8_t(10), uint8_t(11), uint8_t(12)}) {
-        for (auto cr : {uint8_t(1), uint8_t(2), uint8_t(4)}) {
+        for (auto cr : {uint8_t(1), uint8_t(2), uint8_t(3), uint8_t(4)}) {
             for (uint32_t bw : {62500u, 125000u}) {
                 configs.push_back({sf, bw, cr});
             }

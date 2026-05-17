@@ -86,7 +86,7 @@ public:
         }
         auto&      fft = detail::FftPool::acquire(_cfg.sf);
         const auto dr  = gr::lora::dechirp_and_quality(symbol.data(), _cfo_downchirp.data(), _scratch.data(), _N, fft,
-            /*remove_dc=*/false);
+            /*remove_dc=*/true);
         r.bin          = static_cast<uint16_t>(dr.bin);
         r.pmr          = dr.pmr;
         // peak_mag_sq is diagnostic-only (not used by DecodeChain). Left at 0;

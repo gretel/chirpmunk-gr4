@@ -20,12 +20,12 @@ from typing import Any
 #   1. ./config.toml                         (CWD, e.g. when running from apps/)
 #   2. ./apps/config.toml                    (CWD = project root)
 #   3. <package-root>/../../apps/config.toml (relative to scripts/src/lora/core/)
-#   4. ~/.config/gr4-lora/config.toml        (user config)
+#   4. ~/.config/chirpmunk-gr4/config.toml        (user config)
 _CONFIG_SEARCH = [
     Path("config.toml"),
     Path("apps/config.toml"),
     Path(__file__).resolve().parents[3] / "apps" / "config.toml",
-    Path.home() / ".config" / "gr4-lora" / "config.toml",
+    Path.home() / ".config" / "chirpmunk-gr4" / "config.toml",
 ]
 
 _log = logging.getLogger(__name__)

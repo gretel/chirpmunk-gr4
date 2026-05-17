@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: ISC
-"""lora -- single CLI dispatcher for the gr4-lora Python tools.
+"""lora -- single CLI dispatcher for the chirpmunk-gr4 Python tools.
 
 Subcommands are registered here and route to handlers in subpackages.
 Long-running subcommand handlers are expected to call setproctitle()
@@ -168,7 +168,7 @@ def main(argv: list[str] | None = None) -> None:
     # ---- normal argparse for the structured subcommands -----------------
     parser = argparse.ArgumentParser(
         prog="lora",
-        description="gr4-lora receiver software — single CLI dispatcher.",
+        description="chirpmunk-gr4 receiver software — single CLI dispatcher.",
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
 

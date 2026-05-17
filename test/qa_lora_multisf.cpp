@@ -255,6 +255,22 @@ suite<"MultiSfDecoder loopback"> _loopback = [] {
         expect(tag_crc_valid(r.tags));
     };
 
+    "SF8 CR4 BW62.5k os64 (4 MS/s IIO)"_test = [] {
+        const std::vector<uint8_t> payload{'L', 'O', 'R', 'A'};
+        auto                       r = run_loopback(payload, 8, 4, 62500, 64, 0x12, 16, 7, 12);
+        expect(r.ok) << "decoder did not emit a frame";
+        expect(payload_matches(payload, r.decoded)) << "decoded payload mismatch";
+        expect(tag_crc_valid(r.tags)) << "CRC failed";
+    };
+
+    "SF7 CR4 BW62.5k os64 (4 MS/s IIO)"_test = [] {
+        const std::vector<uint8_t> payload{'H', 'E', 'L', 'L', 'O'};
+        auto                       r = run_loopback(payload, 7, 4, 62500, 64, 0x12, 16, 7, 12);
+        expect(r.ok) << "decoder did not emit a frame";
+        expect(payload_matches(payload, r.decoded)) << "decoded payload mismatch";
+        expect(tag_crc_valid(r.tags)) << "CRC failed";
+    };
+
     "SF7 longer payload 16 bytes"_test = [] {
         std::vector<uint8_t> payload(16);
         for (std::size_t i = 0; i < payload.size(); ++i) {
@@ -624,6 +640,51 @@ suite<"MultiSfDecoder sample alignment"> _cfo = [] {
         if (decoded.size() >= payload.size()) {
             expect(payload_matches(payload, decoded));
         }
+    };
+
+    // OS=40 STO prepend regression.
+    // 10 oversampled zeros = 10/40 = 0.25 Nyquist sample offset.
+    // Same sub-sample STO as the os4 prepend-1 test, but through 40x stride.
+    auto run_sto_prepend_os40 = [](std::size_t n_prepend, const std::vector<uint8_t>& payload) {
+        using namespace gr;
+        using namespace gr::lora;
+        const uint8_t  sf  = 8;
+        const uint8_t  cr  = 4;
+        const uint32_t bw  = 62500;
+        const uint8_t  os  = 40;
+        const uint32_t sps = (1u << sf) * os;
+        auto iq = generate_frame_iq(payload, sf, cr, os, 0x12, 8, true, sps * 5, 2, bw, false);
+        std::vector<cf32> shifted;
+        shifted.reserve(iq.size() + n_prepend);
+        for (std::size_t i = 0; i < n_prepend; ++i) shifted.emplace_back(0.f, 0.f);
+        shifted.insert(shifted.end(), iq.begin(), iq.end());
+        Graph graph;
+        auto& src = graph.emplaceBlock<testing::TagSource<cf32, testing::ProcessFunction::USE_PROCESS_BULK>>({{{"n_samples_max", static_cast<gr::Size_t>(shifted.size())}, {"repeat_tags", false}}});
+        src.values = shifted;
+        auto& decoder = graph.emplaceBlock<gr::lora::MultiSfDecoder>();
+        decoder.bandwidth = bw; decoder.sync_word = 0x12; decoder.os_factor = os;
+        decoder.preamble_len = 8; decoder.sf_set = {sf}; decoder.p_false_alarm = 0.01;
+        auto& sink = graph.emplaceBlock<testing::TagSink<uint8_t, testing::ProcessFunction::USE_PROCESS_BULK>>({{{"log_samples", true}}});
+        (void)graph.connect<"out", "in">(src, decoder);
+        (void)graph.connect<"out", "in">(decoder, sink);
+        scheduler::Simple sched;
+        if (auto ret = sched.exchange(std::move(graph)); !ret) return std::vector<uint8_t>{};
+        sched.runAndWait();
+        return std::vector<uint8_t>(sink._samples.begin(), sink._samples.end());
+    };
+
+    "SF8 BW62.5k os40 with 10-sample prepend (sub-sample STO 0.25)"_test = [run_sto_prepend_os40] {
+        const std::vector<uint8_t> payload{'S', 'T', '4', '0'};
+        auto decoded = run_sto_prepend_os40(10, payload);
+        expect(decoded.size() >= payload.size()) << "os40 10-prepend decoded " << decoded.size();
+        if (decoded.size() >= payload.size()) expect(payload_matches(payload, decoded));
+    };
+
+    "SF8 BW62.5k os40 with 20-sample prepend (sub-sample STO 0.50)"_test = [run_sto_prepend_os40] {
+        const std::vector<uint8_t> payload{'S', 'T', '4', '1'};
+        auto decoded = run_sto_prepend_os40(20, payload);
+        expect(decoded.size() >= payload.size()) << "os40 20-prepend decoded " << decoded.size();
+        if (decoded.size() >= payload.size()) expect(payload_matches(payload, decoded));
     };
 };
 

@@ -1,0 +1,106 @@
+# USRP B210/B220 via SoapyUHD
+
+[device]
+driver = "uhd"
+param  = "type=b200"
+clock  = "external"
+
+[logging]
+level = "INFO"
+
+[radio_868]
+freq           = 869618000       # tune frequency in Hz
+rx_channel     = [0, 1]          # which RX channels to use
+tx_channel     = 0               # which TX channel to use
+rx_gain        = 40              # RX gain in dB (range 0..76)
+tx_gain        = 73.5            # TX gain in dB (range 0..89.75)
+lo_offset      = 62500           # hardware LO offset in Hz; shifts the DC spur out of the passband
+dc_offset_auto = true            # let the driver correct DC offset in hardware
+
+[trx]
+name          = "MeshCore 868 MHz"
+radio         = "radio_868"
+rate          = 250000           # baseband sample rate (S/s)
+enable_tx     = true             # enable the TX chain
+use_aa_filter = true             # anti-alias filter before decimation; needed when sample_rate / bandwidth is large
+
+[trx.transmit]
+sf           = 8                 # spreading factor
+bw           = 62500             # bandwidth in Hz
+cr           = 8                 # coding rate (denominator of 4/N; 5..8)
+sync_word    = 0x12              # LoRa sync word; 0x12 = MeshCore / private nets
+preamble_len = 16                # preamble symbol count
+
+[trx.receive]
+#bandwidths = [62500, 125000, 250000]  # decode on this/these bandwidths only; adding more spawns wrong-BW false detections
+bandwidths = [62500]
+
+[[trx.receive.chain]]
+label = "promisc"
+
+[trx.network]
+udp_listen      = "127.0.0.1"
+udp_port        = 5556
+status_interval = 10
+lbt             = true
+lbt_timeout_ms  = 2000
+tx_queue_depth  = 8
+
+[core]
+listen             = "127.0.0.1:5555"
+fanout_queue_depth = 10000
+
+[[core.upstream]]
+name   = "radio_868"
+host   = "127.0.0.1"
+port   = 5556
+strict = true
+
+[core.aggregator]
+window_ms      = 200
+max_candidates = 8
+
+[core.decoders]
+enabled = ["meshcore", "lorawan", "raw"]
+
+[core.decoders.meshcore]
+decrypt          = true
+strict_sync_word = true
+
+[core.decoders.lorawan]
+decrypt = false
+
+[core.identity]
+identity_file     = "data/meshcore/identity.bin"
+keys_dir          = "data/meshcore/keys"
+channels_dir      = "data/meshcore/channels"
+contacts_dir      = "data/meshcore/contacts"
+reload_interval_s = 5
+
+[core.storage]
+backend               = "duckdb"
+db_path               = "data/lora.duckdb"
+batch_rows            = 256
+batch_ms              = 1000
+checkpoint_interval_s = 300
+
+[bridge.meshcore]
+listen_port = 7834
+tx_via_core = true
+eeprom_path = "data/meshcore/config.cbor"
+
+[bridge.serial]
+listen_port = 7835
+
+[scan]
+radio        = "radio_868"
+freq_start   = 867000000
+freq_stop    = 870000000
+bws          = [62500, 125000, 250000]
+l1_rate      = 4000000
+master_clock = 8000000
+
+[scan.network]
+
+[startup]
+services = ["core", "bridge.meshcore", "wav"]

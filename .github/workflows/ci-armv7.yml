@@ -34,5 +34,9 @@ jobs:
       cmake_toolchain_file: "cmake/toolchain-armv7-bootlin.cmake"
       target_desc: "arm-buildroot-linux-gnueabihf (Cortex-A9 NEON hard-float)"
       config_toml: "apps/config-pluto.toml"
+      # FISH Ball / Adalm-Pluto runs libiio v0.26 (per tezuka_fw); cross-build a
+      # matching libiio into the sysroot to enable direct IIOSource/IIOSink path
+      # alongside the SoapyPlutoPAPR fallback.
+      libiio_version: "v0.26"
       artifact_name: gr4-lora-armv7-eabihf-${{ github.sha }}
       retention_days: 14

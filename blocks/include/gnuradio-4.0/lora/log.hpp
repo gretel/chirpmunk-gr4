@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: ISC
 //
-// log.hpp — UTC timestamp + structured log helpers for gr4-lora.
+// log.hpp — UTC timestamp + structured log helpers for chirpmunk-gr4.
 //
 // ts_now()                        → "2026-03-09T14:33:17.342Z"
 // log_ts(level, tag, fmt, ...)    → writes to stderr with unified format:

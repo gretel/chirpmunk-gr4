@@ -34,8 +34,11 @@ def _add_companion_args(p: argparse.ArgumentParser) -> None:
 
     Used by every matrix-driven mode. Modes that also drive an SDR
     binary layer :func:`_add_sdr_args` on top.
+
+    Companion connection is required UNLESS ``--test-config`` supplies
+    a ``[reference]`` block instead.
     """
-    conn = p.add_mutually_exclusive_group(required=True)
+    conn = p.add_mutually_exclusive_group()
     conn.add_argument(
         "--serial",
         help="Companion serial port (USB, e.g. /dev/cu.usbserial-0001)",
@@ -48,8 +51,11 @@ def _add_companion_args(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--matrix",
         choices=list(MATRICES.keys()),
-        default="basic",
-        help="Config matrix (default: basic)",
+        default=None,
+        help=(
+            "Config matrix. Defaults: 'basic' for legacy CLI, "
+            "or [matrix].name from --test-config TOML."
+        ),
     )
     p.add_argument("--hypothesis", default="")
     p.add_argument("--label", default="")
@@ -67,6 +73,16 @@ def _add_companion_args(p: argparse.ArgumentParser) -> None:
         help=(
             "Override every matrix point's tx_power (dBm). Default: matrix value "
             "(2 dBm for basic/sf_sweep/full, 10 dBm for baseline/bridge_full)."
+        ),
+    )
+    p.add_argument(
+        "--test-config",
+        metavar="PATH",
+        default=None,
+        help=(
+            "TOML test-config file (decode mode only). Describes the "
+            "reference companion, matrix, and one or more device-under-test "
+            "entries. CLI flags become overrides when supplied alongside it."
         ),
     )
 
@@ -88,6 +104,13 @@ def _add_sdr_args(p: argparse.ArgumentParser) -> None:
         default="127.0.0.1",
         help="SDR host for UDP subscription (default: 127.0.0.1)",
     )
+    p.add_argument(
+        "--sdr-port",
+        type=int,
+        default=None,
+        metavar="PORT",
+        help="SDR UDP port override (default: driver-specific, 5556 for most)",
+    )
 
 
 def _add_matrix_args(p: argparse.ArgumentParser) -> None:
@@ -102,50 +125,119 @@ def _resolve_tcp(args: argparse.Namespace) -> tuple[str | None, int | None]:
     return parse_host_port(args.tcp)
 
 
+def _resolve_test_config(args: argparse.Namespace, mode: str):
+    """Load --test-config and apply CLI overrides. None when not set."""
+    if not getattr(args, "test_config", None):
+        return None
+    if mode != "decode":
+        raise SystemExit(
+            f"--test-config is only supported by 'decode' mode (got '{mode}')"
+        )
+    from dataclasses import replace as _replace
+
+    from lora.hwtests.test_config import (
+        ReferenceConfig,
+        load_test_config,
+    )
+
+    tc = load_test_config(args.test_config)
+    # CLI --tcp / --serial override [reference] from TOML.
+    cli_tcp_host, cli_tcp_port = _resolve_tcp(args)
+    if cli_tcp_host and cli_tcp_port:
+        tc = _replace(
+            tc, reference=ReferenceConfig(tcp=f"{cli_tcp_host}:{cli_tcp_port}")
+        )
+    elif args.serial:
+        tc = _replace(tc, reference=ReferenceConfig(serial=args.serial))
+    if args.label:
+        tc = _replace(tc, label=args.label)
+    if args.hypothesis:
+        tc = _replace(tc, hypothesis=args.hypothesis)
+    return tc
+
+
 def _dispatch_matrix_mode(mode: str, args: argparse.Namespace) -> int:
+    test_config = _resolve_test_config(args, mode)
+
+    if test_config is None:
+        # Legacy path — companion required from CLI flags.
+        if not args.serial and not args.tcp:
+            raise SystemExit("one of --serial, --tcp, or --test-config is required")
+
+    matrix_name = args.matrix or "basic"
     tcp_host, tcp_port = _resolve_tcp(args)
-    if args.tx_power is not None:
-        # Override every point in the chosen matrix with the CLI tx_power.
-        # Mutates the in-process MATRICES table — fine for a one-shot CLI.
-        import dataclasses
 
-        from lora.hwtests.matrix import MATRICES as _M
-
-        _M[args.matrix] = [
-            dataclasses.replace(p, tx_power=args.tx_power) for p in _M[args.matrix]
-        ]
     if mode == "transmit":
         # Companion-only TX. Skips every SDR-specific kwarg.
+        if args.tx_power is not None:
+            import dataclasses
+
+            from lora.hwtests.matrix import MATRICES as _M
+
+            _M[matrix_name] = [
+                dataclasses.replace(p, tx_power=args.tx_power) for p in _M[matrix_name]
+            ]
         from lora.hwtests.transmit_test import run as transmit_runner
 
         return transmit_runner(
             serial_port=args.serial,
             tcp_host=tcp_host,
             tcp_port=tcp_port,
-            matrix_name=args.matrix,
+            matrix_name=matrix_name,
             label=args.label,
             hypothesis=args.hypothesis,
             attach=args.attach,
         )
+
     if mode == "decode":
         from lora.hwtests.decode_test import run as runner
-    elif mode == "scan":
+
+        return runner(
+            serial_port=args.serial,
+            tcp_host=tcp_host,
+            tcp_port=tcp_port,
+            matrix_name=args.matrix or "",
+            config_file=args.config,
+            binary=args.binary,
+            label=args.label,
+            hypothesis=args.hypothesis,
+            attach=args.attach,
+            host=args.host,
+            test_config=test_config,
+            tx_power=args.tx_power,
+        )
+
+    # scan / tx / bridge — single-DUT only, mutate MATRICES for tx_power.
+    if args.tx_power is not None:
+        import dataclasses
+
+        from lora.hwtests.matrix import MATRICES as _M
+
+        _M[matrix_name] = [
+            dataclasses.replace(p, tx_power=args.tx_power) for p in _M[matrix_name]
+        ]
+    if mode == "scan":
         from lora.hwtests.scan_test import run as runner
     elif mode == "tx":
         from lora.hwtests.tx_test import run as runner
     else:  # bridge
         from lora.hwtests.bridge_test import run as runner
+
+    tx_kwargs = {}
+    if mode == "tx" and args.sdr_port is not None:
+        tx_kwargs["udp_port"] = args.sdr_port
     return runner(
         serial_port=args.serial,
         tcp_host=tcp_host,
         tcp_port=tcp_port,
-        matrix_name=args.matrix,
+        matrix_name=matrix_name,
         config_file=args.config,
         binary=args.binary,
         label=args.label,
         hypothesis=args.hypothesis,
         attach=args.attach,
         host=args.host,
+        **tx_kwargs,
     )
 
 
@@ -173,7 +265,7 @@ def main(argv: list[str] | None = None) -> int:
     # ---- matrix-driven modes ----
     parser = argparse.ArgumentParser(
         prog="lora hwtest",
-        description="Hardware test harness for gr4-lora (Phase 5).",
+        description="Hardware test harness for chirpmunk-gr4 (Phase 5).",
     )
     sub = parser.add_subparsers(dest="mode", required=True)
 

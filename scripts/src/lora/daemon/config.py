@@ -113,6 +113,7 @@ class DaemonConfig:
         }
         storage = StorageConfig(
             db_path=typed.core.storage.db_path,
+            backend=typed.core.storage.backend,
             batch_rows=typed.core.storage.batch_rows,
             batch_ms=typed.core.storage.batch_ms,
             queue_depth=typed.core.fanout_queue_depth,

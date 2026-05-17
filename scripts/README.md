@@ -1,6 +1,6 @@
-# gr4-lora — Python tools
+# chirpmunk-gr4 — Python tools
 
-The C++ side of gr4-lora (`apps/lora_trx`, `apps/lora_scan`) is the SDR
+The C++ side of chirpmunk-gr4 (`apps/lora_trx`, `apps/lora_scan`) is the SDR
 front-end. Everything in `scripts/` is the **Python** half: a single
 `lora` CLI that owns the data plane (the `lora-core` daemon),
 visualisation, decoders, hardware tests, and the MeshCore
@@ -21,7 +21,7 @@ The build is `pyproject.toml`-driven and compatible with [`uv`](https://docs.ast
 ### Development checkout
 
 ```bash
-uv sync          # creates .venv, installs gr4-lora + dev deps
+uv sync          # creates .venv, installs chirpmunk-gr4 + dev deps
 uv run lora --help
 ```
 
@@ -33,7 +33,7 @@ hypothesis) come along automatically.
 ### Stable / per-user install
 
 ```bash
-uv tool install --from . gr4-lora
+uv tool install --from . chirpmunk-gr4
 lora --help
 ```
 
@@ -74,19 +74,19 @@ The lifecycle module flushes DuckDB and closes sockets gracefully.
 
 ## Subcommand reference
 
-| Subcommand | Purpose |
-|------------|---------|
-| `lora core` | data-plane daemon: aggregates `lora_frame` from one or more `lora_trx` upstreams, annotates protocol payloads, persists to DuckDB, fans out CBOR over UDP, proxies `lora_tx` requests. |
-| `lora mon` | live frame viewer subscribing to `lora-core` (`:5555`) — pretty-prints decoded frames + diversity / protocol annotations. |
-| `lora waterfall` | RX waterfall for the narrowband decoder (`lora_trx`). |
-| `lora spectrum` | scan-spectrum viewer (`lora_scan` on `:5557`). |
-| `lora wav` | IQ recorder / replay tool. |
-| `lora decode {meshcore,lorawan,meshtastic,raw}` | offline replay decoder; reads a captured CBOR sequence and dumps decoded frames as JSON. |
-| `lora tx {advert,send,anon-req}` | one-shot MeshCore TX builder; emits a CBOR `lora_tx` request to a `lora_trx` instance. |
-| `lora bridge meshcore` | MeshCore companion-protocol bridge (TCP server on `:7834`) — translates phone-app `CMD_*` ↔ wire packets via `lora-core`. |
-| `lora bridge meshcore migrate-json --from <path>` | one-shot migration of a legacy `meshcore_bridge.py` `config.json` into the typed CBOR EEPROM file. |
-| `lora bridge serial` | serial → TCP adapter for pre-MeshCore radios. |
-| `lora hwtest` | hardware A/B test harness (`decode`, `scan`, `tx`, `bridge` modes — formerly `lora_test.py`). |
+| Subcommand                                        | Purpose                                                                                                                                                                                |
+| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `lora core`                                       | data-plane daemon: aggregates `lora_frame` from one or more `lora_trx` upstreams, annotates protocol payloads, persists to DuckDB, fans out CBOR over UDP, proxies `lora_tx` requests. |
+| `lora mon`                                        | live frame viewer subscribing to `lora-core` (`:5555`) — pretty-prints decoded frames + diversity / protocol annotations.                                                              |
+| `lora waterfall`                                  | RX waterfall for the narrowband decoder (`lora_trx`).                                                                                                                                  |
+| `lora spectrum`                                   | scan-spectrum viewer (`lora_scan` on `:5557`).                                                                                                                                         |
+| `lora wav`                                        | IQ recorder / replay tool.                                                                                                                                                             |
+| `lora decode {meshcore,lorawan,meshtastic,raw}`   | offline replay decoder; reads a captured CBOR sequence and dumps decoded frames as JSON.                                                                                               |
+| `lora tx {advert,send,anon-req}`                  | one-shot MeshCore TX builder; emits a CBOR `lora_tx` request to a `lora_trx` instance.                                                                                                 |
+| `lora bridge meshcore`                            | MeshCore companion-protocol bridge (TCP server on `:7834`) — translates phone-app `CMD_*` ↔ wire packets via `lora-core`.                                                              |
+| `lora bridge meshcore migrate-json --from <path>` | one-shot migration of a legacy `meshcore_bridge.py` `config.json` into the typed CBOR EEPROM file.                                                                                     |
+| `lora bridge serial`                              | serial → TCP adapter for pre-MeshCore radios.                                                                                                                                          |
+| `lora hwtest`                                     | hardware A/B test harness (`decode`, `scan`, `tx`, `bridge` modes — formerly `lora_test.py`).                                                                                          |
 
 Every subcommand accepts `--help`; e.g. `lora core --help` shows the
 `--config`, `--log-level`, `--listen` flags. `lora hwtest --help` lists
@@ -97,24 +97,24 @@ the matrices, attach modes, etc.
 If you are upgrading from a branch that still had the legacy
 `apps`, `lib`, and `tests` directories under `scripts/` on disk:
 
-* **Aggregator config keys removed.** The old `[aggregator]` and
+- **Aggregator config keys removed.** The old `[aggregator]` and
   `[meshcore]` TOML sections are gone. `lora-core` reads `[core]` (with
   nested `upstream`, `aggregator`, `decoders`, `identity`, `storage`).
   Loading a stale config fails fast with a hint pointing at the
   offending key. See `apps/config.toml` for the canonical layout.
-* **Default listen port is `:5555`.** The Phase 2 parallel-run shim
+- **Default listen port is `:5555`.** The Phase 2 parallel-run shim
   that rewrote `:5555` → `:5558` is gone. If you have a long-running
   `lora_agg` instance still bound to `:5555`, stop it first.
-* **MeshCore EEPROM migration is opt-in.** Legacy
+- **MeshCore EEPROM migration is opt-in.** Legacy
   `meshcore_bridge.py config.json` is no longer auto-converted on
   startup. Run
   `lora bridge meshcore migrate-json --from <path>` once to write the
   typed CBOR EEPROM, then start the bridge normally.
-* **DuckDB file path changed.** The legacy `data/lora_frames.duckdb`
+- **DuckDB file path changed.** The legacy `data/lora_frames.duckdb`
   is **not** migrated. The new daemon writes to `data/lora.duckdb`.
   The old file is still readable with `duckdb data/lora_frames.duckdb`
   if you need to query historical data.
-* **The legacy `apps` and `lib` Python modules are gone.** Every tool
+- **The legacy `apps` and `lib` Python modules are gone.** Every tool
   has a canonical home under `lora.*`; invoke via `lora <subcmd>`. The
   legacy top-level imports (`import meshcore_tx`, `import lora_mon`)
   no longer resolve. Use `from lora.tools.meshcore_tx import ...` /

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: ISC
 #
-# CMake toolchain file for cross-compiling gr4-lora for armv7-eabihf (Cortex-A9)
+# CMake toolchain file for cross-compiling chirpmunk-gr4 for armv7-eabihf (Cortex-A9)
 # using the Bootlin prebuilt toolchain.
 #
 # Expected environment variable:

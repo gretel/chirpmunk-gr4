@@ -6,11 +6,11 @@ on:
     tags:
       # only prerelease semver tags (vMAJOR.MINOR.PATCH-suffix). stable tags
       # (no '-' suffix) are matched by a separate workflow / manual cut.
-      - 'v[0-9]+.[0-9]+.[0-9]+-*'
+      - "v[0-9]+.[0-9]+.[0-9]+-*"
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to dry-run (e.g. v0.1.0-rc.1) — creates DRAFT release, not published'
+        description: "Tag to dry-run (e.g. v0.1.0-rc.1) — creates DRAFT release, not published"
         required: true
 
 # Never cancel an in-progress release build — we want to finish what we started.
@@ -23,7 +23,6 @@ permissions:
   contents: read
 
 jobs:
-
   # ---------------------------------------------------------------------------
   # Matrix cross-build — one call into the reusable workflow per target arch.
   # Each row uploads a staged artifact named `release-<arch_slug>` containing
@@ -77,11 +76,11 @@ jobs:
     runs-on: ubuntu-24.04
     needs: [build]
     permissions:
-      contents: write    # gh release create / upload
+      contents: write # gh release create / upload
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          fetch-depth: 0     # git-cliff walks full history
+          fetch-depth: 0 # git-cliff walks full history
 
       - name: Resolve tag
         id: tag
@@ -129,7 +128,7 @@ jobs:
           for d in artifacts/release-*/; do
             arch="${d#artifacts/release-}"
             arch="${arch%/}"
-            pkg="gr4-lora-${arch}-${TAG}"
+            pkg="chirpmunk-gr4-${arch}-${TAG}"
             mv "$d" "$pkg"
             tar -czf "tarballs/${pkg}.tar.gz" "$pkg"
             echo "Packaged ${pkg}.tar.gz:"

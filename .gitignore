@@ -9,6 +9,15 @@
 .local/
 .venv/
 __pycache__/
+
+# AI assistant artifacts
+thoughts/
+.pi-lens/
+.pi-lsp-*
+
+# Build temp
+build-native/
+tmp/
 build/
 build_*/
 build-prof/

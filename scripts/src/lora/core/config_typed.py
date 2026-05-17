@@ -440,6 +440,10 @@ def _build_storage(table: Mapping[str, Any]) -> TypedCoreStorage:
     backend_raw = table.get("backend", "duckdb")
     if not isinstance(backend_raw, str) or not backend_raw:
         raise TypedConfigError("[core.storage].backend must be a non-empty string")
+    if backend_raw not in ("duckdb", "none"):
+        raise TypedConfigError(
+            f"[core.storage].backend must be 'duckdb' or 'none', got {backend_raw!r}"
+        )
     db_path_raw = table.get("db_path", "data/lora.duckdb")
     if not isinstance(db_path_raw, str) or not db_path_raw:
         raise TypedConfigError("[core.storage].db_path must be a non-empty string")

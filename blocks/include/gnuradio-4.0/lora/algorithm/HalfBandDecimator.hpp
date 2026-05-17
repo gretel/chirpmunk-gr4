@@ -394,6 +394,7 @@ struct CascadedDecimator {
         // Stage 0: circular FIR (same as existing)
         scratch0.clear();
         stages[0].process(input, scratch0);
+        const std::size_t s0_size = scratch0.size(); // capture before ping-pong overwrites
 
         // Stages 1+: linear-buffer batch FIR
         for (std::size_t i = 1; i < stages.size(); ++i) {
@@ -404,6 +405,15 @@ struct CascadedDecimator {
         }
 
         auto& result = (stages.size() & 1U) ? scratch0 : scratch1;
+        // DEBUG: per-stage magnitude trace (s0_size captured before ping-pong) (disabled)
+        if (false)
+        {
+            float magN = 0.f;
+            if (!result.empty()) { for (auto& v : result) magN += std::abs(v); magN /= static_cast<float>(result.size()); }
+            std::fprintf(stderr, "AA_STAGE n=%zu in=%zu s0_out=%zu final=%zu mag_final=%.6f\n",
+                stages.size(), input.size(), s0_size, result.size(), static_cast<double>(magN));
+            std::fflush(stderr);
+        }
         out.insert(out.end(), result.begin(), result.end());
     }
 

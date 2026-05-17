@@ -14,9 +14,15 @@ historical state of an existing database file.
 
 from __future__ import annotations
 
+import logging
+from datetime import datetime, timezone
+from pathlib import Path
+
 import duckdb
 
-SCHEMA_VERSION = 1
+log = logging.getLogger("lora.storage")
+
+SCHEMA_VERSION = 2
 
 # ---------------------------------------------------------------------------
 # Table DDL
@@ -93,7 +99,10 @@ CREATE_INDEX_LORA_FRAMES = (
 # legacy ``trx_status``) and the writer-internal ``writer_dropped``
 # column. ``writer_dropped`` is filled by the writer thread from its
 # own bounded-queue overflow counter; upstream Status messages do not
-# carry it.
+# carry it. ``source`` matches the convention on every other telemetry
+# table (``lora_frames``, ``multisf_*``, ``wideband_*``) — the upstream's
+# logical name from ``[[core.upstream]]`` config — so multi-radio
+# heartbeats are attributable.
 CREATE_STATUS_HEARTBEATS = """
 CREATE TABLE IF NOT EXISTS status_heartbeats (
     ts                 TIMESTAMPTZ NOT NULL,
@@ -103,7 +112,8 @@ CREATE TABLE IF NOT EXISTS status_heartbeats (
     frames_crc_ok      UBIGINT,
     frames_crc_fail    UBIGINT,
     rx_overflows       UBIGINT,
-    writer_dropped     UBIGINT
+    writer_dropped     UBIGINT,
+    source             TEXT
 );
 """
 
@@ -195,6 +205,46 @@ ALL_CREATE: list[str] = [
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def archive_if_pre_source_schema(db_path: Path) -> Path | None:
+    """Archive ``db_path`` when its ``status_heartbeats`` table predates the
+    ``source`` column (SCHEMA_VERSION 2).
+
+    Returns the archive path on success, ``None`` when no action was taken
+    (file missing, schema already current, or DB locked / unreadable).
+
+    The migration policy for SCHEMA_VERSION 2 is "fresh schema, archive
+    old DB" — DuckDB's ``ALTER TABLE ADD COLUMN`` would also work but the
+    project preference is to keep the live DB schema-pure and let offline
+    analyses pull from the archive on demand.
+    """
+    if not db_path.exists():
+        return None
+    try:
+        con = duckdb.connect(str(db_path), read_only=True)
+    except duckdb.Error:
+        return None  # locked or unreadable; let main connect surface the error
+    try:
+        rows = con.execute("PRAGMA table_info('status_heartbeats')").fetchall()
+    except duckdb.Error:
+        return None
+    finally:
+        con.close()
+    if not rows:
+        return None  # table absent — apply_schema will create it fresh
+    column_names = {row[1] for row in rows}  # PRAGMA columns: cid, name, type, ...
+    if "source" in column_names:
+        return None
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    archive = db_path.with_name(f"{db_path.name}.pre_source_{stamp}.bak")
+    db_path.rename(archive)
+    log.warning(
+        "storage: archived %s -> %s (schema bump: status_heartbeats.source)",
+        db_path,
+        archive,
+    )
+    return archive
 
 
 def apply_schema(con: duckdb.DuckDBPyConnection) -> None:

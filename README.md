@@ -1,6 +1,6 @@
-# LOST
+# chirpmunk-gr4
 
-**LoRa Open Source Transceiver (LOST)** — a C++23 LoRa PHY transceiver and wideband scanner built on [GNU Radio 4](https://github.com/fair-acc/gnuradio4), paired with a Python toolchain for monitoring, decoding, and telemetry.
+**chirpmunk-gr4** — a C++23 LoRa PHY transceiver and wideband scanner built on [GNU Radio 4](https://github.com/fair-acc/gnuradio4), paired with a Python toolchain for monitoring, decoding, and telemetry.
 
 > **Status:** research prototype. APIs, configuration, and on-wire formats change without notice. Not production-ready.
 
@@ -8,8 +8,8 @@
 
 - Computer able to compile and run `gnuradio4`
 - SDR:
-	- UHD (SoapyUHD)
-	- ~~PAPR (SoapyPlutoPAPR)~~ (not yet)
+  - UHD (SoapyUHD)
+  - ~~PAPR (SoapyPlutoPAPR)~~ (not yet)
 
 ## Build & run
 
@@ -30,7 +30,7 @@ uv sync
 UDP bus is configured in `apps/config.toml`. Defaults:
 
 | Port | Endpoint    | Direction            |
-|------|-------------|----------------------|
+| ---- | ----------- | -------------------- |
 | 5555 | `lora core` | publish to consumers |
 | 5556 | `lora_trx`  | producer → core      |
 | 5557 | `lora_scan` | producer → core      |

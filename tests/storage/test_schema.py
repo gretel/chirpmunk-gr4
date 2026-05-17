@@ -10,7 +10,11 @@ from pathlib import Path
 
 import duckdb
 
-from lora.storage.schema import SCHEMA_VERSION, apply_schema
+from lora.storage.schema import (
+    SCHEMA_VERSION,
+    apply_schema,
+    archive_if_pre_source_schema,
+)
 
 EXPECTED_TABLES = {
     "lora_frames",
@@ -108,3 +112,67 @@ def test_lora_frames_columns_present(tmp_path: Path) -> None:
         "ldro_cfg",
     }
     assert must_have.issubset(cols), f"missing: {must_have - cols}"
+
+
+def test_status_heartbeats_has_source_column(tmp_path: Path) -> None:
+    db = tmp_path / "schema.duckdb"
+    con = duckdb.connect(str(db))
+    try:
+        apply_schema(con)
+        cols = {
+            r[0]
+            for r in con.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = 'status_heartbeats'"
+            ).fetchall()
+        }
+    finally:
+        con.close()
+
+    assert "source" in cols
+
+
+def test_archive_helper_noop_when_file_missing(tmp_path: Path) -> None:
+    assert archive_if_pre_source_schema(tmp_path / "nope.duckdb") is None
+
+
+def test_archive_helper_noop_on_current_schema(tmp_path: Path) -> None:
+    db = tmp_path / "schema.duckdb"
+    con = duckdb.connect(str(db))
+    try:
+        apply_schema(con)
+    finally:
+        con.close()
+    assert archive_if_pre_source_schema(db) is None
+    assert db.exists()
+
+
+def test_archive_helper_archives_pre_source_db(tmp_path: Path) -> None:
+    db = tmp_path / "schema.duckdb"
+    con = duckdb.connect(str(db))
+    try:
+        # Build the *legacy* status_heartbeats shape (no source column) so
+        # the archive helper sees a pre-SCHEMA_VERSION-2 layout.
+        con.execute(
+            """
+            CREATE TABLE status_heartbeats (
+                ts                 TIMESTAMPTZ NOT NULL,
+                rx_gain            DOUBLE,
+                tx_gain            DOUBLE,
+                frames_total       UBIGINT,
+                frames_crc_ok      UBIGINT,
+                frames_crc_fail    UBIGINT,
+                rx_overflows       UBIGINT,
+                writer_dropped     UBIGINT
+            );
+            """
+        )
+    finally:
+        con.close()
+
+    archive = archive_if_pre_source_schema(db)
+    assert archive is not None
+    assert archive.exists()
+    assert not db.exists()
+    assert archive.name.startswith("schema.duckdb.pre_source_")
+    assert archive.name.endswith(".bak")

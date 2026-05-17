@@ -96,7 +96,7 @@ def test_build_txt_msg_roundtrip(tmp_path: Path) -> None:
     sender_expanded, sender_pub, _ = load_or_create_identity(sender_id)
     recipient_expanded, recipient_pub, _ = load_or_create_identity(recipient_id)
 
-    text = "Hello from gr4-lora"
+    text = "Hello from chirpmunk-gr4"
     packet = tx.build_txt_msg(
         text,
         recipient_pub,

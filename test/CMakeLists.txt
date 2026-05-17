@@ -34,7 +34,7 @@ add_executable(qa_lora_config qa_lora_config.cpp ${PROJECT_SOURCE_DIR}/apps/conf
 setup_test(qa_lora_config)
 target_link_libraries(qa_lora_config PRIVATE tomlplusplus::tomlplusplus)
 target_compile_definitions(qa_lora_config PRIVATE
-    CONFIG_TOML_PATH="${PROJECT_SOURCE_DIR}/apps/config.toml"
+    CONFIG_TOML_PATH="${PROJECT_SOURCE_DIR}/apps/config-uhd.toml"
     GIT_REV="test")
 
 add_vector_test(qa_lora_framesink)
@@ -106,7 +106,7 @@ if(NOT CMAKE_CROSSCOMPILING)
         tomlplusplus::tomlplusplus)
     target_compile_definitions(qa_lora_graph_builder PRIVATE
         SOAPY_LOOPBACK_MODULE_PATH="$<TARGET_FILE:soapyloopback>"
-        CONFIG_TOML_PATH="${PROJECT_SOURCE_DIR}/apps/config.toml"
+        CONFIG_TOML_PATH="${PROJECT_SOURCE_DIR}/apps/config-uhd.toml"
         GIT_REV="test")
     add_test(NAME qa_lora_graph_builder
              COMMAND ${CMAKE_CROSSCOMPILING_EMULATOR} ${CMAKE_CURRENT_BINARY_DIR}/qa_lora_graph_builder)
@@ -119,4 +119,3 @@ endif()
 # Test vector generator (not a test — run manually to regenerate vectors)
 add_executable(generate_vectors generate_vectors.cpp)
 target_link_libraries(generate_vectors PRIVATE gr-lora)
-

@@ -174,19 +174,23 @@ async def run_daemon(config: DaemonConfig, *, config_path: Path | None = None) -
     # Storage + identity.
     identity = IdentityStore(config.identity)
     identity.warm_up()
-    writer = DuckDBWriter(config.storage)
-    try:
-        writer.start()
-    except DatabaseLocked as exc:
-        # Another lora core (or any DuckDB writer) holds the file lock.
-        # DuckDB only allows one read-write process per database; refuse
-        # to start cleanly rather than spilling a traceback.
-        _log.error("storage: %s", exc)
-        _log.error(
-            "hint: stop the other lora core process (or point this one at "
-            "a different db_path) before retrying"
-        )
-        return 3
+    writer: DuckDBWriter | None = None
+    if config.storage.backend == "duckdb":
+        writer = DuckDBWriter(config.storage)
+        try:
+            writer.start()
+        except DatabaseLocked as exc:
+            # Another lora core (or any DuckDB writer) holds the file lock.
+            # DuckDB only allows one read-write process per database; refuse
+            # to start cleanly rather than spilling a traceback.
+            _log.error("storage: %s", exc)
+            _log.error(
+                "hint: stop the other lora core process (or point this one at "
+                "a different db_path) before retrying"
+            )
+            return 3
+    else:
+        _log.info("storage: disabled (backend=%r)", config.storage.backend)
 
     # Listen socket (single UDP socket — read + write).
     listen_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -315,7 +319,8 @@ async def run_daemon(config: DaemonConfig, *, config_path: Path | None = None) -
         listen_transport.close()
         await tx_proxy.stop()
         # Final writer drain + close.
-        writer.stop(timeout=5.0)
+        if writer is not None:
+            writer.stop(timeout=5.0)
         lifecycle.uninstall_handlers()
     _log.info("lora-core stopped (rc=0)")
     return 0

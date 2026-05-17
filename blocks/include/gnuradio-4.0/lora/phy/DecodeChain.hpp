@@ -39,6 +39,7 @@
 #include <gnuradio-4.0/lora/algorithm/hamming.hpp>
 #include <gnuradio-4.0/lora/algorithm/interleaving.hpp>
 #include <gnuradio-4.0/lora/algorithm/tx_chain.hpp>
+#include <gnuradio-4.0/lora/log.hpp>
 #include <gnuradio-4.0/lora/phy/Types.hpp>
 
 namespace gr::lora::phy {
@@ -46,27 +47,45 @@ namespace gr::lora::phy {
 class DecodeChain {
 public:
     struct Config {
-        uint8_t  sf           = 7;      ///< spreading factor [7, 12]
-        uint32_t bandwidth_hz = 125000; ///< for LDRO determination
-        bool     soft_decode  = false;  ///< (reserved; phase 4 will use)
+        uint8_t  sf              = 7;      ///< spreading factor [7, 12]
+        uint32_t bandwidth_hz    = 125000; ///< for LDRO determination
+        bool     soft_decode     = false;  ///< (reserved; phase 4 will use)
+        bool     debug           = false;  ///< per-frame header-decode trace
+        bool     implicit_header = false;  ///< skip explicit header parse, use default_cr/pay_len
+        uint8_t  default_cr      = 1;      ///< coding rate for implicit mode (1=4/5..4=4/8)
+        uint16_t default_pay_len = 28;     ///< payload length for implicit mode
     };
 
     void init(const Config& cfg) noexcept {
-        _cfg  = cfg;
-        _N    = uint32_t{1} << cfg.sf;
-        _ldro = gr::lora::needs_ldro(cfg.sf, cfg.bandwidth_hz);
+        _cfg   = cfg;
+        _N     = uint32_t{1} << cfg.sf;
+        _ldro  = gr::lora::needs_ldro(cfg.sf, cfg.bandwidth_hz);
+        _debug = cfg.debug;
         reset();
     }
 
     void reset() noexcept {
-        _phase = Phase::CollectingHeader;
+        if (_cfg.implicit_header) {
+            // Implicit header mode: no header symbols, payload starts
+            // immediately after sync word. Use configured CR + payload_len.
+            _phase            = Phase::CollectingPayload;
+            _cr               = _cfg.default_cr;
+            _pay_len          = _cfg.default_pay_len;
+            _has_crc          = true;
+            // frame has no header symbols in implicit mode
+            _frame_symb_numb  = computePayloadSymbols();
+        } else {
+            // Explicit header mode: first 8 post-preamble symbols encode
+            // CR, payload_len, and header CRC.
+            _phase            = Phase::CollectingHeader;
+            _frame_symb_numb  = 0;
+            _cr               = 0;
+            _pay_len          = 0;
+            _has_crc          = false;
+        }
         _sym_buf.clear();
         _nibbles.clear();
         _total_symbols_rx  = 0;
-        _frame_symb_numb   = 0;
-        _cr                = 0;
-        _pay_len           = 0;
-        _has_crc           = false;
         _payload_syms_seen = 0;
         _payload_lsb0_hits = 0;
     }
@@ -130,6 +149,14 @@ public:
 
     /// Symbols still expected before the frame is complete; only valid after
     /// the header has been parsed (returns 0 in CollectingHeader).
+    /// Number of payload symbols (post-header symbols) needed for the
+    /// current frame, given _cr, _pay_len, _has_crc and _ldro.
+    [[nodiscard]] uint32_t computePayloadSymbols() const noexcept {
+        const double numerator = static_cast<double>(2u * _pay_len - _cfg.sf + 2u + 5u + (_has_crc ? 4u : 0u));
+        const double denom     = static_cast<double>(_cfg.sf - 2u * static_cast<uint32_t>(_ldro));
+        return static_cast<uint32_t>(std::ceil(numerator / denom)) * (4u + _cr);
+    }
+
     [[nodiscard]] uint32_t symbols_remaining() const noexcept {
         if (_frame_symb_numb == 0 || _total_symbols_rx >= _frame_symb_numb) {
             return 0;
@@ -145,6 +172,7 @@ private:
     Config                _cfg;
     uint32_t              _N     = 0;
     bool                  _ldro  = false;
+    bool                  _debug = false;
     Phase                 _phase = Phase::CollectingHeader;
     std::vector<uint16_t> _sym_buf; ///< current interleaver block
     std::vector<uint8_t>  _nibbles; ///< all nibbles header + payload
@@ -188,7 +216,57 @@ private:
 
     [[nodiscard]] std::optional<FrameResult> processHeaderBlock() {
         const uint8_t sf_app = static_cast<uint8_t>(_cfg.sf - 2);
-        auto          nibs   = processInterleaverBlock(std::span<const uint16_t>(_sym_buf.data(), 8), sf_app, /*cw_len=*/8, /*cr_app=*/4);
+
+        if (_debug) {
+            gr::lora::log_ts("debug", "decode", "HDR_RAW sf=%u [%u,%u,%u,%u,%u,%u,%u,%u]",
+                _cfg.sf, _sym_buf[0], _sym_buf[1], _sym_buf[2], _sym_buf[3],
+                _sym_buf[4], _sym_buf[5], _sym_buf[6], _sym_buf[7]);
+        }
+
+        // Do gray-decode + down-shift inline so we can log the intermediate
+        // codewords (critical for diagnosing bin-shift vs deinterleaver bugs).
+        const uint8_t shift = static_cast<uint8_t>(_cfg.sf - sf_app);
+        std::vector<uint16_t> sym_decoded;
+        sym_decoded.reserve(8);
+        for (size_t i = 0; i < 8; ++i) {
+            uint16_t s = adjustBin(_sym_buf[i]);
+            if (shift > 0) {
+                s = static_cast<uint16_t>(s >> shift);
+            }
+            sym_decoded.push_back(s);
+        }
+        auto codewords = gr::lora::deinterleave_block(sym_decoded, _cfg.sf, /*cw_len=*/8, sf_app);
+        std::vector<uint8_t> nibs;
+        nibs.reserve(codewords.size());
+        for (auto cw : codewords) {
+            nibs.push_back(gr::lora::hamming_decode_hard(cw, /*cr_app=*/4));
+        }
+
+        if (_debug) {
+            // Log gray-decoded symbols (shifted to sf_app domain)
+            std::fprintf(stderr, "HDR_GRAY sf=%u [", _cfg.sf);
+            for (size_t i = 0; i < sym_decoded.size(); ++i) {
+                std::fprintf(stderr, "%s%u", i ? "," : "", sym_decoded[i]);
+            }
+            std::fprintf(stderr, "]\n");
+            // Log codewords (8 codes x 8 bits each for cr_app=4)
+            std::fprintf(stderr, "HDR_CW sf=%u [", _cfg.sf);
+            for (size_t i = 0; i < codewords.size(); ++i) {
+                std::fprintf(stderr, "%s%02x", i ? "," : "", codewords[i]);
+            }
+            std::fprintf(stderr, "]\n");
+            std::fflush(stderr);
+        }
+
+        // Nibble + checksum trace.
+        if (_debug && nibs.size() >= 5) {
+            const auto info = gr::lora::parse_explicit_header(nibs[0], nibs[1], nibs[2], nibs[3], nibs[4]);
+            std::fprintf(stderr, "HDR_NIB sf=%u [%02x,%02x,%02x,%02x,%02x] cr=%u pay=%u crc=%d csum=%d\n",
+                _cfg.sf, nibs[0], nibs[1], nibs[2], nibs[3], nibs[4],
+                info.cr, info.payload_len, info.has_crc, info.checksum_valid);
+            std::fflush(stderr);
+        }
+
         _sym_buf.clear();
 
         if (nibs.size() < 5) {
@@ -196,6 +274,7 @@ private:
         }
 
         const auto info = gr::lora::parse_explicit_header(nibs[0], nibs[1], nibs[2], nibs[3], nibs[4]);
+
         if (!info.checksum_valid || info.payload_len == 0) {
             return failFrame();
         }
@@ -211,11 +290,8 @@ private:
         _pay_len = info.payload_len;
         _has_crc = info.has_crc;
 
-        // Number of payload symbols (post-header) needed to deliver
-        // the requested nibble count.
-        const double numerator = static_cast<double>(2 * _pay_len - _cfg.sf + 2 + 5 + (_has_crc ? 4 : 0));
-        const double denom     = static_cast<double>(_cfg.sf - 2 * static_cast<int>(_ldro));
-        _frame_symb_numb       = 8u + static_cast<uint32_t>(std::ceil(numerator / denom)) * (4u + _cr);
+        // Compute total frame length: 8 header symbols + payload symbols.
+        _frame_symb_numb = 8u + computePayloadSymbols();
 
         _nibbles.insert(_nibbles.end(), nibs.begin(), nibs.end());
         _phase = Phase::CollectingPayload;
@@ -266,6 +342,14 @@ private:
         use_nibs &= ~std::size_t{1}; // round down to even (whole bytes)
 
         auto bytes = gr::lora::dewhiten(std::span<const uint8_t>(&_nibbles[kHeaderNibbles], use_nibs), _pay_len);
+
+        // Dewhiten CRC bytes: SX1262 whitens entire data stream including CRC.
+        // dewhiten() only dewhitens the first pay_len payload bytes; CRC bytes
+        // at index pay_len and pay_len+1 need the same per-byte XOR here.
+        if (bytes.size() >= _pay_len + 2u) {
+            bytes[_pay_len] ^= gr::lora::whitening_seq[_pay_len % gr::lora::whitening_seq.size()];
+            bytes[_pay_len + 1u] ^= gr::lora::whitening_seq[(_pay_len + 1u) % gr::lora::whitening_seq.size()];
+        }
 
         r.crc_valid = true;
         if (_has_crc && _pay_len >= 2 && bytes.size() >= _pay_len + 2u) {

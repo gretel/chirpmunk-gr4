@@ -63,9 +63,9 @@ void print_usage() {
     std::fprintf(stderr, "Usage: lora_trx [options]\n\n"
                          "Full-duplex LoRa transceiver with CBOR-over-UDP I/O.\n\n"
                          "Options:\n"
-                         "  --config <file>       TOML configuration file (default: config.toml)\n"
+                         "  --config <file>       TOML configuration file (default: config-uhd.toml)\n"
                          "  --log-level <level>   Log level: DEBUG, INFO, WARNING, ERROR\n"
-                         "                        Overrides [logging] level in config.toml.\n"
+                         "                        Overrides [logging] level in config-uhd.toml.\n"
                          "                        DEBUG also enables verbose decoder traces.\n"
                          "  --version             Show version and exit\n"
                          "  -h, --help            Show this help\n");
@@ -99,7 +99,7 @@ int parse_args(int argc, char* argv[], std::string& config_path, std::string& lo
         return 1;
     }
     if (config_path.empty()) {
-        config_path = "config.toml";
+        config_path = "config-uhd.toml";
     }
     return 0;
 }
@@ -127,7 +127,7 @@ static ParsedDevice parse_device(const toml::table& tbl) {
     d.device = dev_or_s("driver", dev_or_s("device", ""));
     d.param  = dev_or_s("param", "");
     if (d.device.empty()) {
-        throw std::runtime_error("[device].driver is required (e.g. \"uhd\", \"lime\", \"loopback\")");
+        throw std::runtime_error("[device].driver is required (e.g. \"uhd\", \"iio\", \"lime\", \"loopback\")");
     }
     d.clock = dev_or_s("clock", "");
     return d;
@@ -482,6 +482,10 @@ std::vector<TrxConfig> load_config(const std::string& path, const std::string& c
         cfg.enable_tx = *v;
     }
 
+    if (auto v = trx_tbl->at_path("tx_lo_powerdown").value<bool>()) {
+        cfg.tx_lo_powerdown = *v;
+    }
+
     // Validate: rx_channel values are SoapySDR channel indices (0-based)
     if (cfg.rx_channels.empty()) {
         gr::lora::log_ts("error", "config", "rx_channel must have at least one entry");
@@ -825,11 +829,12 @@ std::vector<uint8_t> build_status_cbor(const TrxConfig& cfg, SharedStatus& statu
     return buf;
 }
 
-std::vector<uint8_t> build_spectrum_cbor(gr::lora::SpectrumState& spec, const char* type_name) {
+std::vector<uint8_t> build_spectrum_cbor(gr::lora::SpectrumState& spec, const char* type_name, const std::string& device_serial) {
     namespace cbor = gr::lora::cbor;
     std::vector<uint8_t> buf;
     buf.reserve(64 + spec.fft_size * sizeof(float));
-    cbor::encode_map_begin(buf, 5);
+    const uint32_t n_fields = device_serial.empty() ? 5U : 6U;
+    cbor::encode_map_begin(buf, n_fields);
     cbor::kv_text(buf, "type", type_name);
     {
         std::lock_guard lock(spec.result_mutex);
@@ -839,6 +844,9 @@ std::vector<uint8_t> build_spectrum_cbor(gr::lora::SpectrumState& spec, const ch
     cbor::kv_uint(buf, "fft_size", spec.fft_size);
     cbor::kv_float64(buf, "center_freq", spec.center_freq);
     cbor::kv_float64(buf, "sample_rate", static_cast<double>(spec.sample_rate));
+    if (!device_serial.empty()) {
+        cbor::kv_text(buf, "device", device_serial);
+    }
     return buf;
 }
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: ISC
 """
-conftest.py -- Shared test fixtures for the gr4-lora test suite.
+conftest.py -- Shared test fixtures for the chirpmunk-gr4 test suite.
 
 Single source of truth for: identity helpers, BridgeState factory, mock
 sockets, deterministic test seeds, packet builders, and companion protocol

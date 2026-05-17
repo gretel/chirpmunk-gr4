@@ -32,25 +32,25 @@ trim = true
 
 [git]
 # Parse conventional commits (type(scope): subject) when they exist,
-# but keep non-conventional commits too — gr4-lora has both styles.
+# but keep non-conventional commits too — chirpmunk-gr4 has both styles.
 conventional_commits = true
 filter_unconventional = false
 split_commits = false
 
 # Map commit subject prefixes → display groups. First match wins.
 commit_parsers = [
-  { message = "^feat",             group = "Features" },
-  { message = "^fix",              group = "Bug Fixes" },
-  { message = "^perf",             group = "Performance" },
-  { message = "^refactor",         group = "Refactoring" },
-  { message = "^docs?",            group = "Documentation" },
-  { message = "^test",             group = "Tests" },
-  { message = "^build|^ci",        group = "Build / CI" },
-  { message = "^chore",            group = "Maintenance" },
-  { message = "^remove|^delete",   group = "Removals" },
-  { message = "^update",           group = "Updates" },
-  { message = "^submodule",        group = "Submodule Updates" },
-  { message = ".*",                group = "Other" },
+  { message = "^feat", group = "Features" },
+  { message = "^fix", group = "Bug Fixes" },
+  { message = "^perf", group = "Performance" },
+  { message = "^refactor", group = "Refactoring" },
+  { message = "^docs?", group = "Documentation" },
+  { message = "^test", group = "Tests" },
+  { message = "^build|^ci", group = "Build / CI" },
+  { message = "^chore", group = "Maintenance" },
+  { message = "^remove|^delete", group = "Removals" },
+  { message = "^update", group = "Updates" },
+  { message = "^submodule", group = "Submodule Updates" },
+  { message = ".*", group = "Other" },
 ]
 
 # Drop commits that match these patterns entirely.

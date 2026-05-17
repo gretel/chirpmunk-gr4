@@ -394,6 +394,7 @@ def format_header(
         crc_ok = last_decode.get("crc_valid", False)
         direction = last_decode.get("direction", "rx")
         decode_label = last_decode.get("decode_label", "")
+        source = last_decode.get("source", "")
         crc_str = "\033[32mOK\033[0m" if crc_ok else "\033[31mFAIL\033[0m"
         sf = carrier.get("sf", "?")
         bw = carrier.get("bw", 0)
@@ -416,6 +417,9 @@ def format_header(
         pieces.append(f"SF{sf}/{bw_str}")
         # CRC status (colored)
         pieces.append(f"CRC:{crc_str}")
+        # Source
+        if source:
+            pieces.append(f"\033[2m[{source}]\033[0m")
         # DSP quality: SNR / noise floor / peak (omit when not present)
         if snr is not None:
             pieces.append(f"SNR:{snr:.1f}dB")

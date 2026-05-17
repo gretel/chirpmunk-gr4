@@ -46,7 +46,7 @@ const boost::ut::suite configLoadConfig = [] {
 
         // Device
         expect(eq(c.device, std::string{"uhd"}));
-        expect(eq(c.device_param, std::string{"type=b200,num_recv_frames=512,recv_frame_size=16360"}));
+        expect(eq(c.device_param, std::string{"type=b200"}));
         expect(eq(c.clock, std::string{"external"}));
 
         // Radio
@@ -89,10 +89,8 @@ const boost::ut::suite configLoadConfig = [] {
         auto cfgs = lora_config::load_config(CONFIG_TOML_PATH);
         expect(cfgs.size() == 1_u);
         const auto& bws = cfgs[0].rx_bandwidths;
-        expect(bws.size() == 3_u) << "3 RX bandwidths";
+        expect(bws.size() == 1_u) << "1 RX bandwidth";
         expect(bws[0] == 62'500_u);
-        expect(bws[1] == 125'000_u);
-        expect(bws[2] == 250'000_u);
     };
 
     "network parsed"_test = [] {
@@ -109,7 +107,8 @@ const boost::ut::suite configLoadConfig = [] {
         auto cfgs = lora_config::load_config(CONFIG_TOML_PATH);
         expect(cfgs.size() == 1_u);
         const auto& r = cfgs[0].raw;
-        expect(!r.meshcore.name.empty()) << "meshcore.name non-empty";
+        // [meshcore] section is optional; fields default to empty when absent
+        expect(r.meshcore.name.empty()) << "meshcore.name empty when [meshcore] absent";
         expect(r.aggregator.upstream.find("5556") != std::string::npos) << "aggregator.upstream contains 5556";
     };
 
@@ -656,14 +655,14 @@ const boost::ut::suite configLoadScan = [] {
         expect(cfgs.size() == 1_u) << "expected 1 ScanSetConfig";
         const auto& s = cfgs[0];
 
-        expect(s.freq_start == 863'000'000.0) << "freq_start";
+        expect(s.freq_start == 867'000'000.0) << "freq_start";
         expect(s.freq_stop == 870'000'000.0) << "freq_stop";
         expect(s.bws.size() >= 1_u);
         expect(std::ranges::find(s.bws, uint32_t{62500}) != s.bws.end()) << "bws contains 62500";
         expect(s.os_factor == 4_u) << "os_factor";
         expect(std::abs(s.min_ratio - 5.0F) < 0.01F) << "min_ratio";
-        expect(s.l1_rate == 16'000'000.0) << "l1_rate";
-        expect(s.master_clock == 32'000'000.0) << "master_clock";
+        expect(s.l1_rate == 4'000'000.0) << "l1_rate";
+        expect(s.master_clock == 8'000'000.0) << "master_clock";
         expect(s.udp_port == 5557_u) << "udp_port";
     };
 

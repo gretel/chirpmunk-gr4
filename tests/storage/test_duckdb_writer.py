@@ -353,16 +353,17 @@ def test_writer_status_heartbeat(tmp_path: Path) -> None:
             frames=StatusFrames(total=100, crc_ok=99, crc_fail=1),
             rx_overflows=0,
         )
-        assert w.put_status(s)
+        assert w.put_status(s, "radio_868")
     finally:
         w.stop(timeout=5.0)
 
     rows = _read(
         cfg.db_path,
         "SELECT rx_gain, tx_gain, frames_total, frames_crc_ok, "
-        "frames_crc_fail, rx_overflows, writer_dropped FROM status_heartbeats",
+        "frames_crc_fail, rx_overflows, writer_dropped, source "
+        "FROM status_heartbeats",
     )
-    assert rows == [(40.0, 70.0, 100, 99, 1, 0, 0)]
+    assert rows == [(40.0, 70.0, 100, 99, 1, 0, 0, "radio_868")]
 
 
 def test_writer_handles_malformed_ts_gracefully(tmp_path: Path) -> None:

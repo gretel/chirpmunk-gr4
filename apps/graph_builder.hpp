@@ -26,6 +26,9 @@
 
 // SoapySource.hpp MUST come before common.hpp (common.hpp uses sdr::soapy types)
 #include <gnuradio-4.0/sdr/SoapySource.hpp>
+#if GR4_LORA_HAS_IIO
+#include <gnuradio-4.0/iio/IIOSource.hpp>     // generic libiio source (Adalm-Pluto / FISH Ball)
+#endif
 #include <gnuradio-4.0/testing/NullSources.hpp>
 
 #include "common.hpp"
@@ -87,6 +90,15 @@ inline AppMultiSfDecoder& add_multisf_chain(gr::Graph& graph, const TrxConfig& c
     }
     if (auto it = dc.block_overrides.find("max_symbols"); it != dc.block_overrides.end()) {
         decoder.max_symbols = static_cast<uint32_t>(it->second.template value_or<int64_t>(600));
+    }
+    if (auto it = dc.block_overrides.find("implicit_header"); it != dc.block_overrides.end()) {
+        decoder.implicit_header = it->second.template value_or<bool>(false);
+    }
+    if (auto it = dc.block_overrides.find("implicit_cr"); it != dc.block_overrides.end()) {
+        decoder.implicit_cr = static_cast<uint8_t>(it->second.template value_or<int64_t>(1));
+    }
+    if (auto it = dc.block_overrides.find("implicit_pay_len"); it != dc.block_overrides.end()) {
+        decoder.implicit_pay_len = static_cast<uint16_t>(it->second.template value_or<int64_t>(28));
     }
 
     // FrameSink sync_word: set to the configured filter when strict, or 0
@@ -194,6 +206,53 @@ inline std::atomic<gr::Size_t>* build_rx_graph(gr::Graph& graph, const TrxConfig
     // Create source and wire: 1 radio = SoapySimpleSource, 2 radios = SoapyDualSource
     std::atomic<gr::Size_t>* overflow_ptr = nullptr;
 
+#if GR4_LORA_HAS_IIO
+    if (cfg.device == "iio") {
+        std::string uri = cfg.device_param;
+        if (uri.starts_with("uri=")) {
+            uri = uri.substr(4);
+        }
+        if (nRadio == 1) {
+            // Allow chain-B-RF testing via cfg.rx_channels[0]==1: software-only
+            // mux of RX2_BALANCED into chain-A's known-working baseband path.
+            // Useful to isolate "is RX2 antenna/RF cable healthy?" without
+            // touching the dual-RX 2R2T code path.
+            const std::string rfPort = (cfg.rx_channels[0] == 1U) ? "B_BALANCED" : "A_BALANCED";
+            // AD9361 analog LPF bandwidth: set to widest receive BW, not sample rate.
+            // With stride decimation at os=40 and no anti-alias filter, setting the
+            // analog bandwidth to the sample rate (2.5 MHz) lets all out-of-channel
+            // energy alias into the decimated 62.5 kHz baseband, corrupting per-symbol
+            // demodulation.  Setting it to the channel bandwidth suppresses aliasing.
+            const uint32_t ad9361_bw = *std::max_element(bws.begin(), bws.end());
+            auto& source = graph.emplaceBlock<gr::incubator::iio::IIOSource<std::complex<float>>>({
+                {"uri", uri},
+                {"sample_rate", static_cast<float>(cfg.rate)},
+                {"center_frequency", cfg.freq},
+                {"bandwidth", static_cast<double>(ad9361_bw)},
+                {"gain", cfg.gain_rx},
+                {"gain_mode", std::string("slow_attack")},
+                {"rf_port", rfPort},
+                {"buffer_size", gr::Size_t{32768U}},
+                {"timeout_ms", gr::Size_t{1000U}},
+                // non_blocking=false: blocking refill() gives full 32768-sample
+                // buffers on every call.  On the local backend (uri=local:),
+                // non_blocking=true makes the iio_buffer non-blocking → refill()
+                // returns -ETIMEDOUT/partial reads → polling gaps and ~10 dB worse
+                // preamble SNR.  On the remote backend (uri=ip:…), setBlockingMode()
+                // returns ENOSYS and is silently ignored — the buffer stays in its
+                // default (blocking) mode regardless of this flag, so false is safe
+                // everywhere.
+                {"non_blocking", false},
+                {"max_overflow_count", gr::Size_t{10U}},
+                {"debug", false},   // IIOSource debug OFF — stdout spam triggers double-free on armv7
+            });
+            overflow_ptr = nullptr; // IIOSource has its own overflow counter (private); no SoapySource-style pointer exposure
+            wireDecodeChains([&graph, &source](std::size_t /*r*/, auto& downstream) { return graph.connect<"out", "in">(source, downstream).has_value(); });
+        } else {
+            throw std::runtime_error(std::format("driver=iio supports rx_channels.size() == 1; got {}", nRadio));
+        }
+    } else
+#endif
     if (nRadio == 1) {
         auto props = lora_apps::soapy_reliability_defaults();
         props.merge(gr::property_map{
@@ -335,6 +394,55 @@ inline std::shared_ptr<gr::BlockModel> find_soapy_source(std::span<std::shared_p
     return nullptr;
 }
 
+/// Find the IIOSource block in a scheduler's block list.
+inline std::shared_ptr<gr::BlockModel> find_iio_source(std::span<std::shared_ptr<gr::BlockModel>> blocks) {
+    for (auto& blk : blocks) {
+        if (blk->typeName().find("IIOSource") != std::string_view::npos) {
+            return blk;
+        }
+    }
+    return nullptr;
+}
+
+/// Find any known source block (Soapy or IIO) — whichever is present.
+inline std::shared_ptr<gr::BlockModel> find_source_block(std::span<std::shared_ptr<gr::BlockModel>> blocks) {
+    if (auto s = find_soapy_source(blocks)) {
+        return s;
+    }
+#ifdef GR4_LORA_HAVE_IIO
+    if (auto s = find_iio_source(blocks)) {
+        return s;
+    }
+#endif
+    return nullptr;
+}
+
+/// Read overflow count from a source block (Soapy or IIO).
+/// Returns 0 if block is null or unrecognised type.
+inline uint64_t read_source_overflow(std::shared_ptr<gr::BlockModel> block) {
+    if (!block) {
+        return 0;
+    }
+    const auto tn = block->typeName();
+    if (tn.find("Soapy") != std::string_view::npos) {
+        using SoapyType = gr::blocks::sdr::SoapySource<cf32, 1UZ>;
+        auto* wrapper   = dynamic_cast<gr::BlockWrapper<SoapyType>*>(block.get());
+        if (wrapper) {
+            return wrapper->blockRef()._overflowCount.load(std::memory_order_relaxed);
+        }
+    }
+#if GR4_LORA_HAS_IIO
+    if (tn.find("IIOSource") != std::string_view::npos) {
+        using IIOType = gr::incubator::iio::IIOSource<cf32>;
+        auto* wrapper = dynamic_cast<gr::BlockWrapper<IIOType>*>(block.get());
+        if (wrapper) {
+            return wrapper->blockRef().overflowCount.load(std::memory_order_relaxed);
+        }
+    }
+#endif
+    return 0;
+}
+
 /// Find ScanSink in the scheduler's block list (for wiring callbacks post-exchange).
 inline gr::lora::ScanSink* find_scan_sink(std::span<std::shared_ptr<gr::BlockModel>> blocks) {
     for (auto& blk : blocks) {
@@ -378,44 +486,70 @@ inline ScanGraph build_scan_graph(gr::Graph& graph, const ScanSetConfig& cfg, co
 
     ScanGraph sg;
 
-    // SoapySource -- fixed L1 rate, pinned master clock
-    const double tileCentre   = (channels.front() + channels.back()) / 2.0;
-    auto         source_props = lora_apps::soapy_reliability_defaults();
-    source_props.merge(gr::property_map{
-        {"device", cfg.device},
-        {"device_parameter", cfg.device_param},
-        {"sample_rate", cfg.l1_rate},
-        {"master_clock_rate", cfg.master_clock},
-        {"frequency", std::vector<double>{tileCentre}},
-        {"rx_gains", std::vector<double>{cfg.gain}},
-        {"verbose_overflow", false},
-        {"overflow_recovery", std::string("log_only")},
-        {"overflow_reactivate_threshold", gr::Size_t{5U}},
-    });
-    if (!cfg.clock.empty()) {
-        source_props["clock_source"] = cfg.clock;
-    }
-    if (cfg.lo_offset != 0.0) {
-        source_props["lo_offset"] = cfg.lo_offset;
-    }
-    source_props["dc_offset_mode"] = cfg.dc_offset_auto;
-    if (cfg.lo_offset == 0.0) {
-        source_props["dc_blocker_enabled"] = true;
-        source_props["dc_blocker_cutoff"]  = 2000.f;
-    }
-    if (cfg.sweeps > 0) {
-        // Finite-sweep mode: close the stream cleanly at end-of-sweep instead of
-        // relying on quick_exit(0) ordering during teardown.
-        source_props["disconnect_on_done"] = true;
-    }
-    auto& source = graph.emplaceBlock<gr::blocks::sdr::SoapySimpleSource<cf32>>(std::move(source_props));
-
-    // Splitter -> 2 outputs
+    // Splitter -> 2 outputs (built first so each source backend can connect into it)
     auto& splitter = graph.emplaceBlock<gr::lora::Splitter>({
         {"n_outputs", gr::Size_t{2}},
     });
-    if (!ok(graph.connect<"out", "in">(source, splitter))) {
-        gr::lora::log_ts("error", "graph", "connect source -> splitter failed");
+
+    const double tileCentre = (channels.front() + channels.back()) / 2.0;
+
+#if GR4_LORA_HAS_IIO
+    if (cfg.device == "iio") {
+        // Direct libiio backend: bypasses SoapyPlutoPAPR for native FISH Ball / Pluto.
+        std::string uri = cfg.device_param;
+        if (uri.starts_with("uri=")) {
+            uri = uri.substr(4);
+        }
+        auto& source = graph.emplaceBlock<gr::incubator::iio::IIOSource<cf32>>({
+            {"uri", uri},
+            {"sample_rate", static_cast<float>(cfg.l1_rate)},
+            {"center_frequency", tileCentre},
+            {"bandwidth", static_cast<double>(cfg.l1_rate)},
+            {"gain", cfg.gain},
+            {"gain_mode", std::string("slow_attack")},
+            {"buffer_size", gr::Size_t{32768U}},
+            {"timeout_ms", gr::Size_t{1000U}},
+            {"max_overflow_count", gr::Size_t{10U}},
+        });
+        if (!ok(graph.connect<"out", "in">(source, splitter))) {
+            gr::lora::log_ts("error", "graph", "connect iio source -> splitter failed");
+        }
+    } else
+#endif
+    {
+        // SoapySource -- fixed L1 rate, pinned master clock
+        auto source_props = lora_apps::soapy_reliability_defaults();
+        source_props.merge(gr::property_map{
+            {"device", cfg.device},
+            {"device_parameter", cfg.device_param},
+            {"sample_rate", cfg.l1_rate},
+            {"master_clock_rate", cfg.master_clock},
+            {"frequency", std::vector<double>{tileCentre}},
+            {"rx_gains", std::vector<double>{cfg.gain}},
+            {"verbose_overflow", false},
+            {"overflow_recovery", std::string("log_only")},
+            {"overflow_reactivate_threshold", gr::Size_t{5U}},
+        });
+        if (!cfg.clock.empty()) {
+            source_props["clock_source"] = cfg.clock;
+        }
+        if (cfg.lo_offset != 0.0) {
+            source_props["lo_offset"] = cfg.lo_offset;
+        }
+        source_props["dc_offset_mode"] = cfg.dc_offset_auto;
+        if (cfg.lo_offset == 0.0) {
+            source_props["dc_blocker_enabled"] = true;
+            source_props["dc_blocker_cutoff"]  = 2000.f;
+        }
+        if (cfg.sweeps > 0) {
+            // Finite-sweep mode: close the stream cleanly at end-of-sweep instead of
+            // relying on quick_exit(0) ordering during teardown.
+            source_props["disconnect_on_done"] = true;
+        }
+        auto& source = graph.emplaceBlock<gr::blocks::sdr::SoapySimpleSource<cf32>>(std::move(source_props));
+        if (!ok(graph.connect<"out", "in">(source, splitter))) {
+            gr::lora::log_ts("error", "graph", "connect source -> splitter failed");
+        }
     }
 
     // Path 0: SpectrumTap -> NullSink (L1 energy)
@@ -472,32 +606,6 @@ inline void build_streaming_scan_graph(gr::Graph& graph, const ScanSetConfig& cf
 
     const double centerFreq = cfg.center_freq();
 
-    // SoapySource at L1 wideband rate, fixed center frequency
-    auto source_props = lora_apps::soapy_reliability_defaults();
-    source_props.merge(gr::property_map{
-        {"device", cfg.device},
-        {"device_parameter", cfg.device_param},
-        {"sample_rate", cfg.l1_rate},
-        {"master_clock_rate", cfg.master_clock},
-        {"frequency", std::vector<double>{centerFreq}},
-        {"rx_gains", std::vector<double>{cfg.gain}},
-        {"verbose_overflow", false},
-        {"overflow_recovery", std::string("log_only")},
-        {"overflow_reactivate_threshold", gr::Size_t{5U}},
-    });
-    if (!cfg.clock.empty()) {
-        source_props["clock_source"] = cfg.clock;
-    }
-    if (cfg.lo_offset != 0.0) {
-        source_props["lo_offset"] = cfg.lo_offset;
-    }
-    source_props["dc_offset_mode"] = cfg.dc_offset_auto;
-    if (cfg.lo_offset == 0.0) {
-        source_props["dc_blocker_enabled"] = true;
-        source_props["dc_blocker_cutoff"]  = 2000.f;
-    }
-    auto& source = graph.emplaceBlock<gr::blocks::sdr::SoapySimpleSource<cf32>>(std::move(source_props));
-
     // ScanController: sole downstream block (IQ sink with ring buffer + L1/L2)
     // Build probe_bws string from config bws vector
     std::string probeBwsStr;
@@ -523,8 +631,56 @@ inline void build_streaming_scan_graph(gr::Graph& graph, const ScanSetConfig& cf
         {"probe_bws", probeBwsStr},
     });
 
-    if (!ok(graph.connect<"out", "in">(source, controller))) {
-        gr::lora::log_ts("error", "graph", "connect source -> controller failed");
+#if GR4_LORA_HAS_IIO
+    if (cfg.device == "iio") {
+        std::string uri = cfg.device_param;
+        if (uri.starts_with("uri=")) {
+            uri = uri.substr(4);
+        }
+        auto& source = graph.emplaceBlock<gr::incubator::iio::IIOSource<cf32>>({
+            {"uri", uri},
+            {"sample_rate", static_cast<float>(cfg.l1_rate)},
+            {"center_frequency", centerFreq},
+            {"bandwidth", static_cast<double>(cfg.l1_rate)},
+            {"gain", cfg.gain},
+            {"gain_mode", std::string("slow_attack")},
+            {"buffer_size", gr::Size_t{32768U}},
+            {"timeout_ms", gr::Size_t{1000U}},
+            {"max_overflow_count", gr::Size_t{10U}},
+        });
+        if (!ok(graph.connect<"out", "in">(source, controller))) {
+            gr::lora::log_ts("error", "graph", "connect iio source -> controller failed");
+        }
+    } else
+#endif
+    {
+        auto source_props = lora_apps::soapy_reliability_defaults();
+        source_props.merge(gr::property_map{
+            {"device", cfg.device},
+            {"device_parameter", cfg.device_param},
+            {"sample_rate", cfg.l1_rate},
+            {"master_clock_rate", cfg.master_clock},
+            {"frequency", std::vector<double>{centerFreq}},
+            {"rx_gains", std::vector<double>{cfg.gain}},
+            {"verbose_overflow", false},
+            {"overflow_recovery", std::string("log_only")},
+            {"overflow_reactivate_threshold", gr::Size_t{5U}},
+        });
+        if (!cfg.clock.empty()) {
+            source_props["clock_source"] = cfg.clock;
+        }
+        if (cfg.lo_offset != 0.0) {
+            source_props["lo_offset"] = cfg.lo_offset;
+        }
+        source_props["dc_offset_mode"] = cfg.dc_offset_auto;
+        if (cfg.lo_offset == 0.0) {
+            source_props["dc_blocker_enabled"] = true;
+            source_props["dc_blocker_cutoff"]  = 2000.f;
+        }
+        auto& source = graph.emplaceBlock<gr::blocks::sdr::SoapySimpleSource<cf32>>(std::move(source_props));
+        if (!ok(graph.connect<"out", "in">(source, controller))) {
+            gr::lora::log_ts("error", "graph", "connect source -> controller failed");
+        }
     }
 
     // ScanSink: receives spectrum (with embedded detections) from ScanController
@@ -534,6 +690,8 @@ inline void build_streaming_scan_graph(gr::Graph& graph, const ScanSetConfig& cf
         gr::lora::log_ts("error", "graph", "connect controller.spectrum_out -> sink.spectrum failed");
     }
 }
+
+
 
 } // namespace lora_graph
 

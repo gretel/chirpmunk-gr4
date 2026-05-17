@@ -1,0 +1,11 @@
+{
+  "sf": 8,
+  "bw": 62500,
+  "cr": 3,
+  "sync_word": 18,
+  "impl_head": false,
+  "has_crc": true,
+  "preamble_len": 8,
+  "os_factor": 4,
+  "payload": "Hello MeshCore"
+}

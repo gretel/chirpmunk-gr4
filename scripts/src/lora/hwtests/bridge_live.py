@@ -217,7 +217,7 @@ def main(
         msg_text = args.message
     else:
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        msg_text = f"gr4-lora test {ts}"
+        msg_text = f"chirpmunk-gr4 test {ts}"
 
     print(f"Target: {TARGET_NAME} ({TARGET_PUBKEY.hex()[:16]}..)")
     print(f"Message: {msg_text}")

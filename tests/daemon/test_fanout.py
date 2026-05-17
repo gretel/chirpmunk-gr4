@@ -246,9 +246,9 @@ async def test_fanout_dispatches_status(db_path: Path) -> None:
         writer.stop(timeout=2.0)
         sender.close()
     con = duckdb.connect(str(db_path), read_only=True)
-    n = con.execute("SELECT COUNT(*) FROM status_heartbeats").fetchone()
+    rows = con.execute("SELECT source FROM status_heartbeats").fetchall()
     con.close()
-    assert n is not None and n[0] == 1
+    assert rows == [("radio_868",)]
 
 
 def test_fanout_drops_oldest_on_queue_overflow() -> None:

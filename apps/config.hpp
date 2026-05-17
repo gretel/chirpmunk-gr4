@@ -48,7 +48,7 @@ struct DecodeConfig {
 
 // Passthrough config sections for Python scripts.
 // Mirrors the TOML section structure so Python gets the same nested dict
-// it would have gotten from parsing config.toml directly.
+// it would have gotten from parsing a TOML config directly.
 struct RawConfig {
     // [network] — UDP addressing (scripts resolve listen addresses from here)
     struct Network {
@@ -135,6 +135,9 @@ struct TrxConfig {
     // Decode options
     bool soft_decode{false};   ///< soft-decision (LLR) Hamming decode (experimental)
     bool use_aa_filter{false}; ///< half-band FIR anti-alias in narrowband decimate
+
+    // IIOSink-only
+    bool tx_lo_powerdown{true}; ///< power down TX LO after DMA cancel (Phase 6)
 };
 
 /// Scan-specific configuration (parsed from [scan] section).
@@ -238,7 +241,9 @@ std::vector<uint8_t> build_config_cbor(const TrxConfig& cfg, const std::string& 
 std::vector<uint8_t> build_status_cbor(const TrxConfig& cfg, SharedStatus& status, const char* git_rev = "", const std::string& device_serial = "");
 
 /// Build a CBOR spectrum message from a SpectrumState result buffer.
-std::vector<uint8_t> build_spectrum_cbor(gr::lora::SpectrumState& spec, const char* type_name = "spectrum");
+/// `device_serial` (when non-empty) is emitted under the "device" key so
+/// multi-source consumers can attribute spectrum frames to a radio.
+std::vector<uint8_t> build_spectrum_cbor(gr::lora::SpectrumState& spec, const char* type_name = "spectrum", const std::string& device_serial = "");
 
 } // namespace lora_config
 

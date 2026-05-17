@@ -39,13 +39,15 @@ using cf32 = std::complex<float>;
 /// Build the IQ for a single TX burst (preamble + payload + tail zeros),
 /// then apply the head-pad + raised-cosine taper so the live preamble
 /// starts with envelope = 1 and the tail ramps cleanly to zero.
-std::vector<cf32> generate_iq(const std::vector<uint8_t>& payload, const TrxConfig& cfg, uint8_t cr_override = 0, uint16_t sync_override = 0, uint16_t preamble_override = 0) {
-    auto     os   = static_cast<uint8_t>(cfg.rate / static_cast<float>(cfg.bw));
-    uint32_t sps  = (1u << cfg.sf) * os;
+std::vector<cf32> generate_iq(const std::vector<uint8_t>& payload, const TrxConfig& cfg, uint8_t cr_override = 0, uint16_t sync_override = 0, uint16_t preamble_override = 0, uint8_t sf_override = 0, uint32_t bw_override = 0) {
+    auto     bw   = bw_override ? bw_override : cfg.bw;
+    auto     os   = static_cast<uint8_t>(cfg.rate / static_cast<float>(bw));
+    uint8_t  sf   = sf_override ? sf_override : cfg.sf;
+    uint32_t sps  = (1u << sf) * os;
     uint8_t  cr   = cr_override ? cr_override : cfg.cr;
     uint16_t sync = sync_override ? sync_override : cfg.sync;
     uint16_t pre  = preamble_override ? preamble_override : cfg.preamble;
-    auto     iq   = gr::lora::generate_frame_iq(payload, cfg.sf, cr, os, sync, pre, true, sps * 2, 2, cfg.bw);
+    auto     iq   = gr::lora::generate_frame_iq(payload, sf, cr, os, sync, pre, true, sps * 2, 2, bw);
     gr::lora::prependHeadPadAndTaper(iq);
     return iq;
 }
@@ -141,14 +143,20 @@ void handle_tx_request(const gr::lora::cbor::Map& msg, const TrxConfig& cfg, Udp
         return;
     }
 
+    auto sf_req  = static_cast<uint8_t>(get_uint_or(msg, "sf", cfg.sf));
+    if (sf_req < 7 || sf_req > 12) { sf_req = cfg.sf; }  // clamp to valid SF range
+
     auto cr      = static_cast<uint8_t>(get_uint_or(msg, "cr", cfg.cr));
     auto sync    = static_cast<uint16_t>(get_uint_or(msg, "sync_word", cfg.sync));
     auto pre     = static_cast<uint16_t>(get_uint_or(msg, "preamble_len", cfg.preamble));
     auto repeat  = static_cast<int>(get_uint_or(msg, "repeat", 1));
     auto gap_ms  = static_cast<int>(get_uint_or(msg, "gap_ms", 1000));
     bool dry_run = get_bool_or(msg, "dry_run", false);
+    auto bw_req  = static_cast<uint32_t>(get_uint_or(msg, "bw", 0));
+    if (bw_req == 0) { bw_req = cfg.bw; }
 
-    auto iq = generate_iq(payload, cfg, cr, sync, pre);
+
+    auto iq = generate_iq(payload, cfg, cr, sync, pre, sf_req, bw_req);
 
     // repeat + gap
     if (repeat > 1) {
@@ -171,7 +179,7 @@ void handle_tx_request(const gr::lora::cbor::Map& msg, const TrxConfig& cfg, Udp
     if (repeat > 1) {
         std::snprintf(repeat_str, sizeof(repeat_str), " repeat=%d", repeat);
     }
-    gr::lora::log_ts("info ", "lora_trx", "TX bytes=%zu sf=%u cr=4/%u sync=0x%02X airtime=%.1fms%s%s  %s%s", payload.size(), cfg.sf, 4u + cr, sync, airtime * 1000.0, repeat_str, dry_run ? " dry" : "", hex.c_str(), payload.size() > kMaxHexBytes ? "..." : "");
+    gr::lora::log_ts("info", "lora_trx", "TX payload=%zu sf=%u cr=%u/%u airtime=%.1fms repeat=%d%s", payload.size(), sf_req, 4, cr, airtime * 1000.0, repeat_str, dry_run ? " dry" : "");
 
     // Push TX IQ to spectrum tap (if connected) for waterfall display
     if (tx_spectrum != nullptr) {
@@ -188,7 +196,7 @@ void handle_tx_request(const gr::lora::cbor::Map& msg, const TrxConfig& cfg, Udp
     // TX frames side-by-side on the same wire format.  Filtered broadcast
     // so sync-word subscribers also get matching-sync TX frames (symmetry).
     if (ok && !dry_run) {
-        auto tx_frame = build_tx_frame_cbor(payload, cfg.sf, cfg.bw, cr, sync);
+        auto tx_frame = build_tx_frame_cbor(payload, sf_req, bw_req, cr, sync);
         udp.broadcast(tx_frame, sync);
     }
 
@@ -200,6 +208,7 @@ void handle_tx_request(const gr::lora::cbor::Map& msg, const TrxConfig& cfg, Udp
     gr::lora::cbor::kv_text(ack, "type", "lora_tx_ack");
     gr::lora::cbor::kv_uint(ack, "seq", seq);
     gr::lora::cbor::kv_bool(ack, "ok", ok);
+    gr::lora::log_ts("debug", "lora_trx", "TX sending ack ok=%d seq=%" PRIu64 " (%zu CBOR bytes)", ok, seq, ack.size());
     udp.sendTo(ack, sender);
 }
 
@@ -214,6 +223,9 @@ void process_tx_request(const TxRequest& req, const TrxConfig& cfg, UdpState& ud
     }
     try {
         if (cfg.lbt) {
+            if (channel_busy.load(std::memory_order_acquire)) {
+                gr::lora::log_ts("debug", "lora_trx", "TX LBT: channel busy, waiting up to %ums (seq=%" PRIu64 ")", cfg.lbt_timeout_ms, seq);
+            }
             auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(cfg.lbt_timeout_ms);
             while (channel_busy.load(std::memory_order_acquire)) {
                 if (std::chrono::steady_clock::now() >= deadline) {
@@ -224,6 +236,7 @@ void process_tx_request(const TxRequest& req, const TrxConfig& cfg, UdpState& ud
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
         }
+        gr::lora::log_ts("debug", "lora_trx", "TX calling handle_tx_request (seq=%" PRIu64 ")", seq);
         handle_tx_request(req.msg, cfg, udp, req.sender, tx_source, tx_spectrum);
     } catch (const std::exception& e) {
         gr::lora::log_ts("error", "lora_trx", "TX request failed: %s (seq=%" PRIu64 ")", e.what(), seq);

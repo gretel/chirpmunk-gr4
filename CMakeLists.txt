@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: ISC
 cmake_minimum_required(VERSION 3.27)
-project(gr4-lora CXX)
+project(chirpmunk-gr4 CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -75,20 +75,42 @@ endif()
 add_subdirectory(blocks)
 
 # --- Tests ---
-option(ENABLE_LORA_TESTING "Enable gr4-lora test suite" ON)
+option(ENABLE_LORA_TESTING "Enable chirpmunk-gr4 test suite" ON)
 if(ENABLE_LORA_TESTING)
     enable_testing()
     add_subdirectory(test)
 endif()
 
 # --- Benchmarks ---
-option(ENABLE_LORA_BENCHMARKS "Enable gr4-lora benchmarks" ON)
+option(ENABLE_LORA_BENCHMARKS "Enable chirpmunk-gr4 benchmarks" ON)
 if(ENABLE_LORA_BENCHMARKS)
     add_subdirectory(benchmarks)
 endif()
 
+# --- IIO block library (header-only, sourced from gr4-incubator) ---
+# Phase A: external sibling path. After the iio branch is published the path will
+# move to a real git submodule and this option flips to ON by default.
+option(GR4_LORA_BUILD_IIO "Build IIO source/sink blocks (requires libiio + gr4-incubator headers)" OFF)
+set(GR4_INCUBATOR_DIR "${CMAKE_CURRENT_SOURCE_DIR}/gr4-incubator"
+    CACHE PATH "Path to gr4-incubator source tree containing blocks/iio/include")
+if(GR4_LORA_BUILD_IIO)
+    if(NOT EXISTS "${GR4_INCUBATOR_DIR}/blocks/iio/include/gnuradio-4.0/iio/IIOSource.hpp")
+        message(FATAL_ERROR "GR4_LORA_BUILD_IIO=ON but '${GR4_INCUBATOR_DIR}/blocks/iio/include/gnuradio-4.0/iio/IIOSource.hpp' not found. Set GR4_INCUBATOR_DIR.")
+    endif()
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(LIBIIO REQUIRED IMPORTED_TARGET libiio)
+    add_library(gr4_lora_iio_blocks INTERFACE)
+    target_include_directories(gr4_lora_iio_blocks INTERFACE "${GR4_INCUBATOR_DIR}/blocks/iio/include")
+    target_link_libraries(gr4_lora_iio_blocks INTERFACE PkgConfig::LIBIIO)
+    if(TARGET gnuradio-core-group)
+        target_link_libraries(gr4_lora_iio_blocks INTERFACE gnuradio-core-group)
+    endif()
+    add_library(gr4_lora::iio_blocks ALIAS gr4_lora_iio_blocks)
+    message(STATUS "GR4_LORA_BUILD_IIO   : ON (headers='${GR4_INCUBATOR_DIR}/blocks/iio/include')")
+endif()
+
 # --- Hardware applications (require UHD or SoapySDR) ---
-option(ENABLE_LORA_APPS "Enable gr4-lora hardware applications" ON)
+option(ENABLE_LORA_APPS "Enable chirpmunk-gr4 hardware applications" ON)
 if(ENABLE_LORA_APPS)
     # SoapySDR may already be found by GR4 subdirectory; if not, search common paths
     if(NOT TARGET SoapySDR)
@@ -96,4 +118,24 @@ if(ENABLE_LORA_APPS)
         find_package(SoapySDR CONFIG QUIET)
     endif()
     add_subdirectory(apps)
+
+    # IIO graph-builder property_map smoke test (requires libiio + gr4-incubator).
+    # Must be registered AFTER add_subdirectory(apps) where the gr4l::blocks_iio_headers
+    # target is created. Does NOT start the scheduler — property reflection only.
+    if(TARGET gr4l::blocks_iio_headers AND NOT CMAKE_CROSSCOMPILING)
+        message(STATUS "IIO test: qa_lora_graph_builder_iio enabled")
+        add_executable(qa_lora_graph_builder_iio
+            test/qa_lora_graph_builder_iio.cpp apps/config.cpp)
+        target_link_libraries(qa_lora_graph_builder_iio PRIVATE
+            gr-lora gnuradio-options gnuradio-core-group gr-sdr gr-testing ut
+            tomlplusplus::tomlplusplus gr4l::blocks_iio_headers)
+        target_compile_definitions(qa_lora_graph_builder_iio PRIVATE
+            CONFIG_TOML_PATH="${PROJECT_SOURCE_DIR}/apps/config-iio-local.toml"
+            GIT_REV="test"
+            GR4_LORA_HAVE_IIO
+            GR4_LORA_HAS_IIO=1)
+        add_test(NAME qa_lora_graph_builder_iio
+                 COMMAND ${CMAKE_CROSSCOMPILING_EMULATOR} ${CMAKE_CURRENT_BINARY_DIR}/qa_lora_graph_builder_iio)
+        set_tests_properties(qa_lora_graph_builder_iio PROPERTIES TIMEOUT 30)
+    endif()
 endif()

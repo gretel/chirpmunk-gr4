@@ -258,7 +258,7 @@ class FanOut:
         self,
         *,
         queue_depth: int,
-        writer: DuckDBWriter,
+        writer: DuckDBWriter | None,
         broadcaster: UdpBroadcaster,
     ) -> None:
         self._queue: asyncio.Queue[_QueueItem | object] = asyncio.Queue(
@@ -325,12 +325,14 @@ class FanOut:
     def _dispatch(self, kind: str, source: str, payload: object) -> None:
         if kind == "frame":
             assert isinstance(payload, LoraFrame)
-            self._writer.put(payload)
+            if self._writer:
+                self._writer.put(payload)
             self._broadcaster.broadcast(payload)
             return
         if kind == "status":
             assert isinstance(payload, Status)
-            self._writer.put_status(payload)
+            if self._writer:
+                self._writer.put_status(payload, source)
             self._broadcaster.broadcast_status(payload)
             return
         if kind == "telemetry":
@@ -343,18 +345,23 @@ class FanOut:
             self._broadcaster.broadcast_spectrum(event)
             return
         if isinstance(event, MultisfDetect):
-            self._writer.put_multisf_detect(event, source)
+            if self._writer:
+                self._writer.put_multisf_detect(event, source)
             return
         if isinstance(event, MultisfSync):
-            self._writer.put_multisf_sync(event, source)
+            if self._writer:
+                self._writer.put_multisf_sync(event, source)
             return
         if isinstance(event, MultisfFrame):
-            self._writer.put_multisf_frame(event, source)
+            if self._writer:
+                self._writer.put_multisf_frame(event, source)
             return
         if isinstance(event, WidebandSweep):
-            self._writer.put_wideband_sweep(event, source)
+            if self._writer:
+                self._writer.put_wideband_sweep(event, source)
             return
         if isinstance(event, WidebandSlot):
-            self._writer.put_wideband_slot(event, source)
+            if self._writer:
+                self._writer.put_wideband_slot(event, source)
             return
         _log.debug("fanout: unhandled telemetry %s", type(event).__name__)
