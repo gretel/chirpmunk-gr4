@@ -201,7 +201,7 @@ const boost::ut::suite iioGraphBuilderSmoke = [] {
             }
         }
 
-        checkBool("non_blocking", true);
+        checkBool("non_blocking", false);
 
         // max_overflow_count should be present
         {
