@@ -86,7 +86,7 @@ if(NOT CMAKE_CROSSCOMPILING)
 
     add_executable(qa_soapy_loopback qa_soapy_loopback.cpp)
     target_link_libraries(qa_soapy_loopback PRIVATE
-        gr-lora gnuradio-options gnuradio-core-group gr-sdr gr-testing ut)
+        gr-lora gnuradio-options gnuradio-core-group gr-sdr gr-testing ut gr4l::blocks_soapysdr_headers)
     target_compile_definitions(qa_soapy_loopback PRIVATE
         SOAPY_LOOPBACK_MODULE_PATH="$<TARGET_FILE:soapyloopback>")
     add_test(NAME qa_soapy_loopback
@@ -103,7 +103,7 @@ if(NOT CMAKE_CROSSCOMPILING)
         ${PROJECT_SOURCE_DIR}/apps/config.cpp)
     target_link_libraries(qa_lora_graph_builder PRIVATE
         gr-lora gnuradio-options gnuradio-core-group gr-sdr gr-testing ut
-        tomlplusplus::tomlplusplus)
+        tomlplusplus::tomlplusplus gr4l::blocks_soapysdr_headers)
     target_compile_definitions(qa_lora_graph_builder PRIVATE
         SOAPY_LOOPBACK_MODULE_PATH="$<TARGET_FILE:soapyloopback>"
         CONFIG_TOML_PATH="${PROJECT_SOURCE_DIR}/apps/config-uhd.toml"

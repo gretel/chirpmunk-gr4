@@ -8,11 +8,16 @@ if(NOT TARGET gr-sdr)
     return()
 endif()
 
+add_library(gr4l_blocks_soapysdr_headers INTERFACE)
+add_library(gr4l::blocks_soapysdr_headers ALIAS gr4l_blocks_soapysdr_headers)
+target_include_directories(gr4l_blocks_soapysdr_headers INTERFACE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../gr4-incubator/blocks/soapysdr/include)
+
 add_executable(lora_trx lora_trx.cpp config.cpp tx_worker.cpp)
-target_link_libraries(lora_trx PRIVATE gnuradio-core-group gr-lora gr-sdr gr-testing tomlplusplus::tomlplusplus)
+target_link_libraries(lora_trx PRIVATE gnuradio-core-group gr-lora gr-sdr gr-testing tomlplusplus::tomlplusplus gr4l::blocks_soapysdr_headers)
 
 add_executable(lora_scan lora_scan.cpp config.cpp)
-target_link_libraries(lora_scan PRIVATE gnuradio-core-group gr-lora gr-sdr gr-testing tomlplusplus::tomlplusplus)
+target_link_libraries(lora_scan PRIVATE gnuradio-core-group gr-lora gr-sdr gr-testing tomlplusplus::tomlplusplus gr4l::blocks_soapysdr_headers)
 
 # IIO block support — enables IIOSource-based on-device decode when cfg.uri is
 # non-empty.  Uses libiio directly and the header-only gr4-incubator IIO blocks.

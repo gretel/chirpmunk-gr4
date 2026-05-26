@@ -128,7 +128,7 @@ if(ENABLE_LORA_APPS)
             test/qa_lora_graph_builder_iio.cpp apps/config.cpp)
         target_link_libraries(qa_lora_graph_builder_iio PRIVATE
             gr-lora gnuradio-options gnuradio-core-group gr-sdr gr-testing ut
-            tomlplusplus::tomlplusplus gr4l::blocks_iio_headers)
+            tomlplusplus::tomlplusplus gr4l::blocks_iio_headers gr4l::blocks_soapysdr_headers)
         target_compile_definitions(qa_lora_graph_builder_iio PRIVATE
             CONFIG_TOML_PATH="${PROJECT_SOURCE_DIR}/apps/config-iio-local.toml"
             GIT_REV="test"
