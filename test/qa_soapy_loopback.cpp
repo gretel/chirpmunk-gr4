@@ -7,8 +7,8 @@
 #include <gnuradio-4.0/Scheduler.hpp>
 #include <gnuradio-4.0/lora/algorithm/tx_chain.hpp>
 #include <gnuradio-4.0/meta/formatter.hpp>
-#include <gnuradio-4.0/sdr/SoapySink.hpp>
-#include <gnuradio-4.0/sdr/SoapySource.hpp>
+#include <gnuradio-4.0/soapysdr/SoapyDevSink.hpp>
+#include <gnuradio-4.0/soapysdr/SoapyDevSource.hpp>
 #include <gnuradio-4.0/testing/NullSources.hpp>
 
 #if defined(__clang__)
@@ -316,7 +316,7 @@ const boost::ut::suite<"SoapyLoopback GR4 graph"> gr4GraphTests = [] {
         expect(loadErr.empty()) << std::format("loadModule failed: {}", loadErr);
 
         using namespace gr;
-        using namespace gr::blocks::sdr;
+        using namespace gr::incubator::soapysdr;
         using namespace gr::testing;
         using scheduler = gr::scheduler::Simple<>;
         using ValueType = std::complex<float>;
@@ -325,7 +325,7 @@ const boost::ut::suite<"SoapyLoopback GR4 graph"> gr4GraphTests = [] {
 
         gr::Graph flow;
         auto&     source = flow.emplaceBlock<ConstantSource<ValueType>>({{"n_samples_max", nSamples}});
-        auto&     sink   = flow.emplaceBlock<SoapySink<ValueType, 1UZ>>({
+        auto&     sink   = flow.emplaceBlock<SoapyDevSink<ValueType, 1UZ>>({
             {"device", "loopback"},
             {"sample_rate", float(1e6)},
             {"frequency", std::vector<double>{434e6}},
@@ -363,13 +363,13 @@ const boost::ut::suite<"SoapyLoopback GR4 graph"> gr4GraphTests = [] {
         expect(loadErr.empty()) << std::format("loadModule failed: {}", loadErr);
 
         using namespace gr;
-        using namespace gr::blocks::sdr;
+        using namespace gr::incubator::soapysdr;
         using namespace gr::testing;
         using ValueType = std::complex<float>;
 
         // verify SoapySource can be emplaced into a graph with the loopback driver
         gr::Graph flow;
-        auto&     source = flow.emplaceBlock<SoapySource<ValueType, 1UZ>>({
+        auto&     source = flow.emplaceBlock<SoapyDevSource<ValueType, 1UZ>>({
             {"device", "loopback"},
             {"sample_rate", float(1e6)},
             {"frequency", std::vector<double>{107e6}},
