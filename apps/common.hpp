@@ -22,8 +22,8 @@
 
 #include <gnuradio-4.0/lora/log.hpp>
 
-// log_hardware_info() uses gr::blocks::sdr::soapy types — include
-// SoapySource.hpp and/or SoapyRaiiWrapper.hpp before this header.
+// log_hardware_info() uses gr::incubator::soapysdr types — include
+// SoapyDevSource.hpp and/or SoapyDevRaiiWrapper.hpp before this header.
 
 namespace lora_apps {
 

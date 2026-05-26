@@ -1,8 +1,8 @@
 [submodule "gnuradio4"]
 	path = gnuradio4
 	url = https://github.com/gretel/gnuradio4.git
-	branch = gr4-lora-patches
+	branch = main
 [submodule "gr4-incubator"]
 	path = gr4-incubator
 	url = https://github.com/gretel/gr4-incubator.git
-	branch = feat/iio-block
+	branch = main

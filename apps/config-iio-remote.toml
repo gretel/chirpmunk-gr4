@@ -1,7 +1,7 @@
 # ── Remote PlutoSDR via libiio-over-network ──────────────────────────────────
 
 [device]
-driver = "iio"               # IIO block path (IIOSource instead of SoapySource)
+driver = "iio"               # IIO block path (IIOSource instead of SoapyDevSource)
 param = "uri=ip:10.0.23.149" # <-- change to your Pluto's IP
 clock = "internal"
 

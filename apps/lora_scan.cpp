@@ -120,7 +120,7 @@ static std::vector<double> makeChannelList(double freqStart, double freqStop, do
 
 /// Retune the source frequency via GR4 settings (no stream restart).
 /// The graph keeps streaming during the settle delay -- no overflow.
-/// Supports both SoapySource (key="frequency") and IIOSource (key="center_frequency").
+/// Supports both SoapyDevSource (key="frequency") and IIOSource (key="center_frequency").
 static void retune_source(std::shared_ptr<gr::BlockModel>& source, double freq, int settleMs) {
     if (!source) {
         return;
@@ -244,7 +244,7 @@ static bool extractTileEnergy(std::shared_ptr<gr::lora::SpectrumState>& spectrum
 }
 
 /// L1 scan using SpectrumState.  For single-tile configs, reads the spectrum
-/// directly.  For multi-tile, retunes the SoapySource to each tile centre.
+/// directly.  For multi-tile, retunes the SoapyDevSource to each tile centre.
 static Layer1Result layer1Scan(std::shared_ptr<gr::lora::SpectrumState>& spectrum, std::shared_ptr<gr::BlockModel>& soapy_source, const std::vector<double>& channels, const ScanSetConfig& cfg) {
     const std::size_t nCh = channels.size();
     Layer1Result      result;
@@ -936,7 +936,7 @@ static int streaming_main(ScanSetConfig& cfg) {
     lora_graph::build_streaming_scan_graph(graph, cfg);
 
     gr::scheduler::Simple<gr::scheduler::ExecutionPolicy::singleThreadedBlocking> sched;
-    sched.timeout_inactivity_count = 10U; // SoapySource IO thread drives progress; log after 10s stall
+    sched.timeout_inactivity_count = 10U; // SoapyDevSource IO thread drives progress; log after 10s stall
 
     if (auto ret = sched.exchange(std::move(graph)); !ret) {
         gr::lora::log_ts("error", "lora_scan", "scheduler init failed");
@@ -1121,7 +1121,7 @@ int main(int argc, char** argv) {
         auto sg = lora_graph::build_scan_graph(graph, cfg, channels);
 
         gr::scheduler::Simple<gr::scheduler::ExecutionPolicy::singleThreadedBlocking> sched;
-        sched.timeout_inactivity_count = 10U; // SoapySource IO thread drives progress; log after 10s stall
+        sched.timeout_inactivity_count = 10U; // SoapyDevSource IO thread drives progress; log after 10s stall
 
         if (auto ret = sched.exchange(std::move(graph)); !ret) {
             gr::lora::log_ts("error", "lora_scan", "scheduler init failed");

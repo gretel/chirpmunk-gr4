@@ -484,7 +484,7 @@ std::vector<TrxConfig> load_config(const std::string& path, const std::string& c
     }
 
     // enable_tx: when false, skip TX graph construction entirely. Useful
-    // as a workaround for the SoapySink dual-channel TX STREAM_ERROR on
+    // as a workaround for the SoapyDevSink dual-channel TX STREAM_ERROR on
     // B210/B220 via UHD, and for any RX-only monitor deployment.
     if (auto v = trx_tbl->at_path("enable_tx").value<bool>()) {
         cfg.enable_tx = *v;

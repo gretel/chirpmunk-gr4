@@ -9,7 +9,7 @@
 /// scheduler can sleep. Call notifyProgress() after every push() to wake it.
 ///
 /// Two output ports (out0, out1) are produced in lockstep (same sample count
-/// per call), so SoapySink<cf32,2> stays in sync. out0 carries the IQ
+/// per call), so SoapyDevSink<cf32,2> stays in sync. out0 carries the IQ
 /// signal; out1 carries matching zeros for the second TX channel (if present).
 
 #include <algorithm>

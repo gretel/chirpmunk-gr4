@@ -2,8 +2,8 @@
 //
 // Shared GR4 graph construction for lora_trx and lora_scan.
 //
-// - build_rx_graph():   SoapySource → [Splitter] → MultiSfDecoder → FrameSink
-// - build_scan_graph(): SoapySource → Splitter → SpectrumTap + CaptureSink
+// - build_rx_graph():   SoapyDevSource → [Splitter] → MultiSfDecoder → FrameSink
+// - build_scan_graph(): SoapyDevSource → Splitter → SpectrumTap + CaptureSink
 // - find_rx_blocks():   locate typed blocks after scheduler exchange()
 
 #ifndef GR4_LORA_GRAPH_BUILDER_HPP
@@ -24,8 +24,8 @@
 #include <gnuradio-4.0/lora/Splitter.hpp>
 #include <gnuradio-4.0/lora/log.hpp>
 
-// SoapySource.hpp MUST come before common.hpp (common.hpp uses sdr::soapy types)
-#include <gnuradio-4.0/sdr/SoapySource.hpp>
+
+#include <gnuradio-4.0/soapysdr/SoapyDevSource.hpp>
 #if GR4_LORA_HAS_IIO
 #include <gnuradio-4.0/iio/IIOSource.hpp>     // generic libiio source (Adalm-Pluto / FISH Ball)
 #endif
@@ -246,7 +246,7 @@ inline std::atomic<gr::Size_t>* build_rx_graph(gr::Graph& graph, const TrxConfig
                 {"max_overflow_count", gr::Size_t{10U}},
                 {"debug", false},   // IIOSource debug OFF — stdout spam triggers double-free on armv7
             });
-            overflow_ptr = nullptr; // IIOSource has its own overflow counter (private); no SoapySource-style pointer exposure
+            overflow_ptr = nullptr; // IIOSource has its own overflow counter (private); no SoapyDevSource-style pointer exposure
             wireDecodeChains([&graph, &source](std::size_t /*r*/, auto& downstream) { return graph.connect<"out", "in">(source, downstream).has_value(); });
         } else {
             throw std::runtime_error(std::format("driver=iio supports rx_channels.size() == 1; got {}", nRadio));
@@ -268,7 +268,7 @@ inline std::atomic<gr::Size_t>* build_rx_graph(gr::Graph& graph, const TrxConfig
             {"dc_offset_mode", cfg.dc_offset_auto},
             // Auto-enable DSP DC blocker when lo_offset=0 — the driver can't
             // shift the DC spur out-of-band (e.g. PlutoSDR/SoapyPlutoPAPR),
-            // so the IIR high-pass in SoapySource removes it in software.
+            // so the IIR high-pass in SoapyDevSource removes it in software.
             // When lo_offset != 0, the hardware DDC (UHD FPGA) already handles
             // it and the blocker is unnecessary.
             {"dc_blocker_enabled", cfg.lo_offset == 0.0},
@@ -285,7 +285,7 @@ inline std::atomic<gr::Size_t>* build_rx_graph(gr::Graph& graph, const TrxConfig
             {"ppm_estimator_cutoff", (cfg.device == "uhd") ? 0.5f : 0.0f},
             {"ppm_tag_threshold", 1.0f}, // throttle sample_rate/frequency tag storm (default 0.1)
         });
-        auto& source = graph.emplaceBlock<gr::blocks::sdr::SoapySimpleSource<std::complex<float>>>(std::move(props));
+        auto& source = graph.emplaceBlock<gr::incubator::soapysdr::SoapySimpleSource<std::complex<float>>>(std::move(props));
         overflow_ptr = &source._overflowCount;
         wireDecodeChains([&graph, &source](std::size_t /*r*/, auto& downstream) { return graph.connect<"out", "in">(source, downstream).has_value(); });
     } else {
@@ -314,7 +314,7 @@ inline std::atomic<gr::Size_t>* build_rx_graph(gr::Graph& graph, const TrxConfig
             {"ppm_estimator_cutoff", 0.5f}, // track crystal drift (Hz LP cutoff)
             {"ppm_tag_threshold", 1.0f},    // throttle sample_rate/frequency tag storm (default 0.1)
         });
-        auto& source = graph.emplaceBlock<gr::blocks::sdr::SoapyDualSource<std::complex<float>>>(std::move(props));
+        auto& source = graph.emplaceBlock<gr::incubator::soapysdr::SoapyDualSource<std::complex<float>>>(std::move(props));
         overflow_ptr = &source._overflowCount;
         wireDecodeChains([&graph, &source](std::size_t r, auto& downstream) {
             auto portName = "out#"s + std::to_string(r);
@@ -384,7 +384,7 @@ inline RxBlocks find_rx_blocks(std::span<std::shared_ptr<gr::BlockModel>> blocks
     return rx;
 }
 
-/// Find the SoapySource block in a scheduler's block list.
+/// Find the SoapyDevSource block in a scheduler's block list.
 inline std::shared_ptr<gr::BlockModel> find_soapy_source(std::span<std::shared_ptr<gr::BlockModel>> blocks) {
     for (auto& blk : blocks) {
         if (blk->typeName().find("Soapy") != std::string_view::npos) {
@@ -425,7 +425,7 @@ inline uint64_t read_source_overflow(std::shared_ptr<gr::BlockModel> block) {
     }
     const auto tn = block->typeName();
     if (tn.find("Soapy") != std::string_view::npos) {
-        using SoapyType = gr::blocks::sdr::SoapySource<cf32, 1UZ>;
+        using SoapyType = gr::incubator::soapysdr::SoapyDevSource<cf32, 1UZ>;
         auto* wrapper   = dynamic_cast<gr::BlockWrapper<SoapyType>*>(block.get());
         if (wrapper) {
             return wrapper->blockRef()._overflowCount.load(std::memory_order_relaxed);
@@ -479,7 +479,7 @@ struct ScanGraph {
     std::shared_ptr<gr::lora::CaptureState>  capture;
 };
 
-/// Build the scan graph: SoapySource → Splitter → SpectrumTap + CaptureSink
+/// Build the scan graph: SoapyDevSource → Splitter → SpectrumTap + CaptureSink
 inline ScanGraph build_scan_graph(gr::Graph& graph, const ScanSetConfig& cfg, const std::vector<double>& channels) {
     auto ok = [](std::expected<void, gr::Error> r) { return r.has_value(); };
     using std::string_literals::operator""s;
@@ -517,7 +517,7 @@ inline ScanGraph build_scan_graph(gr::Graph& graph, const ScanSetConfig& cfg, co
     } else
 #endif
     {
-        // SoapySource -- fixed L1 rate, pinned master clock
+        // SoapyDevSource -- fixed L1 rate, pinned master clock
         auto source_props = lora_apps::soapy_reliability_defaults();
         source_props.merge(gr::property_map{
             {"device", cfg.device},
@@ -546,7 +546,7 @@ inline ScanGraph build_scan_graph(gr::Graph& graph, const ScanSetConfig& cfg, co
             // relying on quick_exit(0) ordering during teardown.
             source_props["disconnect_on_done"] = true;
         }
-        auto& source = graph.emplaceBlock<gr::blocks::sdr::SoapySimpleSource<cf32>>(std::move(source_props));
+        auto& source = graph.emplaceBlock<gr::incubator::soapysdr::SoapySimpleSource<cf32>>(std::move(source_props));
         if (!ok(graph.connect<"out", "in">(source, splitter))) {
             gr::lora::log_ts("error", "graph", "connect source -> splitter failed");
         }
@@ -597,7 +597,7 @@ inline ScanGraph build_scan_graph(gr::Graph& graph, const ScanSetConfig& cfg, co
     return sg;
 }
 
-/// Build the streaming scan graph: SoapySource → ScanController → ScanSink
+/// Build the streaming scan graph: SoapyDevSource → ScanController → ScanSink
 /// No hardware retune — L2 uses digital channelization from the wideband stream.
 /// ScanController handles both L1 energy (internal FFT) and L2 CAD.
 /// Use find_scan_sink() post-exchange to wire the _onDataSet callback.
@@ -677,7 +677,7 @@ inline void build_streaming_scan_graph(gr::Graph& graph, const ScanSetConfig& cf
             source_props["dc_blocker_enabled"] = true;
             source_props["dc_blocker_cutoff"]  = 2000.f;
         }
-        auto& source = graph.emplaceBlock<gr::blocks::sdr::SoapySimpleSource<cf32>>(std::move(source_props));
+        auto& source = graph.emplaceBlock<gr::incubator::soapysdr::SoapySimpleSource<cf32>>(std::move(source_props));
         if (!ok(graph.connect<"out", "in">(source, controller))) {
             gr::lora::log_ts("error", "graph", "connect source -> controller failed");
         }

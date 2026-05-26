@@ -222,7 +222,7 @@ struct MultiSfDecoder : public gr::Block<MultiSfDecoder, gr::NoTagPropagation> {
     std::function<void(const gr::property_map&)> _telemetry;
     std::shared_ptr<SpectrumState>               _spectrum_state;
 
-    // Upstream timing-tag cache (from SoapySource ppm_estimator).
+    // Upstream timing-tag cache (from SoapyDevSource ppm_estimator).
     // Re-emitted on each frame so FrameSink can record the exact sample
     // rate / ppm-corrected frequency the frame was sampled at.
     // Task 7 (FrameSink) consumes these via the same tag keys.

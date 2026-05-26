@@ -1,7 +1,7 @@
 # ── On-device decode via libiio (tezuka FISH Ball PlutoSDR) ────────────────
 
 [device]
-driver = "iio"       # IIO block path (IIOSource instead of SoapySource)
+driver = "iio"       # IIO block path (IIOSource instead of SoapyDevSource)
 param = "uri=local:" # IIO context URI (local: on-device, ip:HOST for remote)
 clock = "internal"
 
