@@ -187,6 +187,8 @@ private:
     uint32_t _s_down   = 0;
     uint32_t _nid1_bin = 0; ///< NID1 argmax bin (pre-CFO correction)
     uint32_t _nid2_bin = 0; ///< NID2 argmax bin (pre-CFO correction)
+    float    _nid1_peak_mag = 0.f;
+    float    _nid2_peak_mag = 0.f;
 
     // Diagnostics
     float _peak_db  = 0.f;
@@ -381,12 +383,19 @@ private:
         const auto        stats = dechirpAndFft(samples.data(), _downchirp_ref.data(), _scratch.data(), _N, Y.data());
         if (is_nid1) {
             _nid1_bin = stats.argmax_bin;
+            _nid1_peak_mag = stats.peak_mag;
             _stage    = Stage::IntegerSkip2;
         } else {
             _nid2_bin = stats.argmax_bin;
+            _nid2_peak_mag = stats.peak_mag;
             _stage    = Stage::IntegerD1;
         }
         _result.state = SyncResult::State::Syncing;
+        // DEBUG: log raw NID bin and peak magnitude
+        std::fprintf(stderr, "PSYNC_NID sf=%u nid=%s raw_bin=%u peak_dbfs=%.1f\n",
+            _cfg.sf, is_nid1 ? "1" : "2", stats.argmax_bin,
+            static_cast<double>(20.f * (stats.peak_mag > 0.f ? std::log10(stats.peak_mag) : -999.f)));
+        std::fflush(stderr);
     }
 
     void runIntegerD1(std::span<const cf32> samples) {
@@ -447,6 +456,11 @@ private:
             // Invert by subtracting both cfo_int and sto_int.
             const int32_t nid1_corrected = mod_pos(static_cast<int32_t>(_nid1_bin) - L_cfo - L_sto);
             const int32_t nid2_corrected = mod_pos(static_cast<int32_t>(_nid2_bin) - L_cfo - L_sto);
+
+            // DEBUG: log raw state before sync word decode
+            std::fprintf(stderr, "PSYNC_LOCK sf=%u s_up=%u s_down=%u L_cfo=%d L_sto=%d nid1_raw=%u nid2_raw=%u nid1_corr=%d nid2_corr=%d\n",
+                _cfg.sf, _s_up, _s_down, L_cfo, L_sto, _nid1_bin, _nid2_bin, nid1_corrected, nid2_corrected);
+            std::fflush(stderr);
 
             if (_cfg.promiscuous) {
                 // Decode the observed sync_word from the NID bin positions.
