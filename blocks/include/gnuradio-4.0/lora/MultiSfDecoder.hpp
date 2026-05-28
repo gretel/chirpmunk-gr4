@@ -603,9 +603,12 @@ private:
         ++lane.output_symbol_count;
         if (auto frame = lane.decode.push_symbol(demod_result.bin); frame.has_value()) {
             if (!frame->header_valid || frame->payload.empty()) {
+                uint16_t adj = (demod_result.bin == 0) ? static_cast<uint16_t>(lane.N - 1) : static_cast<uint16_t>(demod_result.bin - 1);
+                adj = static_cast<uint16_t>(adj ^ (adj >> 1));
+                std::fprintf(stderr, "DROP sf=%u bw=%u header_valid=%d pay_len=%u cr=%u crc=%d snr=%.1fdB raw_bin=%u adj_bin=%u\n",
+                    lane.sf, bandwidth, frame->header_valid, static_cast<unsigned>(frame->payload_len), static_cast<unsigned>(frame->cr), frame->crc_valid, static_cast<double>(lane.cached_snr_db), demod_result.bin, adj);
+                std::fflush(stderr);
                 if (debug) {
-                    uint16_t adj = (demod_result.bin == 0) ? static_cast<uint16_t>(lane.N - 1) : static_cast<uint16_t>(demod_result.bin - 1);
-                    adj = static_cast<uint16_t>(adj ^ (adj >> 1));
                     gr::lora::log_ts("debug", "multisf",
                         "DROP sf=%u bw=%u header_valid=%d pay_len=%u "
                         "cr=%u crc=%d snr=%.1fdB raw_bin=%u adj_bin=%u",

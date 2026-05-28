@@ -458,8 +458,8 @@ private:
             const int32_t nid2_corrected = mod_pos(static_cast<int32_t>(_nid2_bin) - L_cfo - L_sto);
 
             // DEBUG: log raw state before sync word decode
-            std::fprintf(stderr, "PSYNC_LOCK sf=%u s_up=%u s_down=%u L_cfo=%d L_sto=%d nid1_raw=%u nid2_raw=%u nid1_corr=%d nid2_corr=%d\n",
-                _cfg.sf, _s_up, _s_down, L_cfo, L_sto, _nid1_bin, _nid2_bin, nid1_corrected, nid2_corrected);
+            std::fprintf(stderr, "PSYNC_LOCK sf=%u s_up=%u s_down=%u L_cfo=%d L_sto=%d nid1_raw=%u nid2_raw=%u nid1_corr=%d nid2_corr=%d snr=%.1f\n",
+                _cfg.sf, _s_up, _s_down, L_cfo, L_sto, _nid1_bin, _nid2_bin, nid1_corrected, nid2_corrected, static_cast<double>(_result.snr_db));
             std::fflush(stderr);
 
             if (_cfg.promiscuous) {
