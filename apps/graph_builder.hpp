@@ -255,6 +255,7 @@ inline std::atomic<gr::Size_t>* build_rx_graph(gr::Graph& graph, const TrxConfig
             {"num_channels", gr::Size_t{1}},
             {"rx_antennae", antennae},
             {"clock_source", cfg.clock},
+            {"lo_offset", cfg.lo_offset},
             {"dc_offset_mode", cfg.dc_offset_auto},
             // Auto-enable DSP DC blocker when lo_offset=0 — the driver can't
             // shift the DC spur out-of-band (e.g. PlutoSDR/SoapyPlutoPAPR),
@@ -297,6 +298,7 @@ inline std::atomic<gr::Size_t>* build_rx_graph(gr::Graph& graph, const TrxConfig
             {"num_channels", gr::Size_t{2}},
             {"rx_antennae", antennae},
             {"clock_source", cfg.clock},
+            {"lo_offset", cfg.lo_offset},
             {"dc_offset_mode", cfg.dc_offset_auto},
             {"dc_blocker_enabled", cfg.lo_offset == 0.0},
             {"dc_blocker_cutoff", (cfg.lo_offset == 0.0) ? 2000.f : 10.f},
