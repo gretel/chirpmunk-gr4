@@ -32,22 +32,33 @@ namespace gr::lora {
     return crc;
 }
 
-/// Compute the LoRa payload CRC-16/XMODEM (polynomial 0x1021, init 0x0000).
-/// Standard CRC over all payload bytes, matching SX1262 hardware CRC.
+/// Compute the LoRa payload CRC as used by the TX chain (add_crc block):
+///   1. CRC-16 over the first (payload_len - 2) bytes
+///   2. XOR with last byte and (second-to-last byte << 8)
+/// Returns the 16-bit CRC to be split into 4 nibbles.
 [[nodiscard]] inline uint16_t lora_payload_crc(std::span<const uint8_t> payload) {
-    return crc16(payload);
+    const auto len = payload.size();
+    uint16_t   crc = 0x0000;
+
+    // CRC over first (N-2) bytes
+    if (len >= 2) {
+        crc = crc16(payload.first(len - 2));
+        // XOR with last two payload bytes
+        crc ^= static_cast<uint16_t>(payload[len - 1]);
+        crc ^= static_cast<uint16_t>(payload[len - 2]) << 8;
+    }
+    return crc;
 }
 
 /// Split a 16-bit CRC into 4 nibbles in LoRa order (low byte first, low nibble first).
 [[nodiscard]] inline std::array<uint8_t, 4> crc_to_nibbles(uint16_t crc) { return {static_cast<uint8_t>(crc & 0x0F), static_cast<uint8_t>((crc >> 4) & 0x0F), static_cast<uint8_t>((crc >> 8) & 0x0F), static_cast<uint8_t>((crc >> 12) & 0x0F)}; }
 
 /// Verify the LoRa payload CRC on the RX side.
-/// payload contains payload_len bytes of data; crc_lo/crc_hi are the 2 CRC bytes.
-/// Uses standard CRC-16/XMODEM (matching SX1262 hardware CRC).
+/// payload_with_crc contains payload_len bytes of data followed by 2 CRC bytes (reassembled).
 /// Returns true if CRC matches.
 [[nodiscard]] inline bool lora_verify_crc(std::span<const uint8_t> payload, uint8_t crc_lo, uint8_t crc_hi) {
     uint16_t received_crc = static_cast<uint16_t>(static_cast<unsigned>(crc_lo) | (static_cast<unsigned>(crc_hi) << 8));
-    uint16_t computed     = crc16(payload);
+    uint16_t computed     = lora_payload_crc(payload);
     return received_crc == computed;
 }
 
