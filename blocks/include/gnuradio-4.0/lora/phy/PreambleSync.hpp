@@ -187,8 +187,6 @@ private:
     uint32_t _s_down   = 0;
     uint32_t _nid1_bin = 0; ///< NID1 argmax bin (pre-CFO correction)
     uint32_t _nid2_bin = 0; ///< NID2 argmax bin (pre-CFO correction)
-    float    _nid1_peak_mag = 0.f;
-    float    _nid2_peak_mag = 0.f;
 
     // Diagnostics
     float _peak_db  = 0.f;
@@ -315,23 +313,11 @@ private:
                 acc += Yl[kkz] * std::conj(Ylm1[kkz]);
             }
         }
-        float cfo_frac = (std::abs(acc) > 0.f) ? std::arg(acc) / (2.f * std::numbers::pi_v<float>) : 0.f;
+        const float cfo_frac = (std::abs(acc) > 0.f) ? std::arg(acc) / (2.f * std::numbers::pi_v<float>) : 0.f;
 
-        // Wrap fractional CFO to [-0.5, 0.5). When |cfo_frac| >= 0.5 the
-        // integer bin estimate (i_peak) is off by 1 — correct by adjusting
-        // i_peak and wrapping cfo_frac. This handles fractional-only CFO
-        // cases (e.g. +3.5 bins at SF8) where the cross-correlation phase
-        // wraps around π.
-        if (cfo_frac >= 0.5f) {
-            cfo_frac -= 1.0f;
-            if (i_peak > 0) {
-                --i_peak;
-            }
-        } else if (cfo_frac < -0.5f) {
-            cfo_frac += 1.0f;
-            if (i_peak < _N - 1) {
-                ++i_peak;
-            }
+        if (std::abs(cfo_frac) >= 0.5f) {
+            failWith();
+            return;
         }
         _cfo_frac_est = cfo_frac;
 
@@ -383,19 +369,12 @@ private:
         const auto        stats = dechirpAndFft(samples.data(), _downchirp_ref.data(), _scratch.data(), _N, Y.data());
         if (is_nid1) {
             _nid1_bin = stats.argmax_bin;
-            _nid1_peak_mag = stats.peak_mag;
             _stage    = Stage::IntegerSkip2;
         } else {
             _nid2_bin = stats.argmax_bin;
-            _nid2_peak_mag = stats.peak_mag;
             _stage    = Stage::IntegerD1;
         }
         _result.state = SyncResult::State::Syncing;
-        // DEBUG: log raw NID bin and peak magnitude
-        std::fprintf(stderr, "PSYNC_NID sf=%u nid=%s raw_bin=%u peak_dbfs=%.1f\n",
-            _cfg.sf, is_nid1 ? "1" : "2", stats.argmax_bin,
-            static_cast<double>(20.f * (stats.peak_mag > 0.f ? std::log10(stats.peak_mag) : -999.f)));
-        std::fflush(stderr);
     }
 
     void runIntegerD1(std::span<const cf32> samples) {
@@ -456,11 +435,6 @@ private:
             // Invert by subtracting both cfo_int and sto_int.
             const int32_t nid1_corrected = mod_pos(static_cast<int32_t>(_nid1_bin) - L_cfo - L_sto);
             const int32_t nid2_corrected = mod_pos(static_cast<int32_t>(_nid2_bin) - L_cfo - L_sto);
-
-            // DEBUG: log raw state before sync word decode
-            std::fprintf(stderr, "PSYNC_LOCK sf=%u s_up=%u s_down=%u L_cfo=%d L_sto=%d nid1_raw=%u nid2_raw=%u nid1_corr=%d nid2_corr=%d snr=%.1f\n",
-                _cfg.sf, _s_up, _s_down, L_cfo, L_sto, _nid1_bin, _nid2_bin, nid1_corrected, nid2_corrected, static_cast<double>(_result.snr_db));
-            std::fflush(stderr);
 
             if (_cfg.promiscuous) {
                 // Decode the observed sync_word from the NID bin positions.
