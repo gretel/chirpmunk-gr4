@@ -91,15 +91,6 @@ inline AppMultiSfDecoder& add_multisf_chain(gr::Graph& graph, const TrxConfig& c
     if (auto it = dc.block_overrides.find("max_symbols"); it != dc.block_overrides.end()) {
         decoder.max_symbols = static_cast<uint32_t>(it->second.template value_or<int64_t>(600));
     }
-    if (auto it = dc.block_overrides.find("implicit_header"); it != dc.block_overrides.end()) {
-        decoder.implicit_header = it->second.template value_or<bool>(false);
-    }
-    if (auto it = dc.block_overrides.find("implicit_cr"); it != dc.block_overrides.end()) {
-        decoder.implicit_cr = static_cast<uint8_t>(it->second.template value_or<int64_t>(1));
-    }
-    if (auto it = dc.block_overrides.find("implicit_pay_len"); it != dc.block_overrides.end()) {
-        decoder.implicit_pay_len = static_cast<uint16_t>(it->second.template value_or<int64_t>(28));
-    }
 
     // FrameSink sync_word: set to the configured filter when strict, or 0
     // when promiscuous.  In promiscuous mode MultiSfDecoder emits a per-frame

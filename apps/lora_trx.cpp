@@ -186,8 +186,6 @@ std::unique_ptr<gr::scheduler::Simple<gr::scheduler::ExecutionPolicy::singleThre
             {"tx_antennae", cfg.tx_antenna.empty() ? std::vector<std::string>{} : std::vector<std::string>{cfg.tx_antenna}},
             {"clock_source", cfg.clock},
             {"master_clock_rate", 24.0e6},
-            {"timed_tx", true},
-            {"wait_burst_ack", true},
             {"max_underflow_count", gr::Size_t{0}},
         });
 
@@ -223,8 +221,6 @@ std::unique_ptr<gr::scheduler::Simple<gr::scheduler::ExecutionPolicy::singleThre
             {"tx_antennae", cfg.tx_antenna.empty() ? std::vector<std::string>{} : std::vector<std::string>{cfg.tx_antenna}},
             {"clock_source", cfg.clock},
             {"master_clock_rate", 24.0e6},
-            {"timed_tx", true},
-            {"wait_burst_ack", true},
             {"max_underflow_count", gr::Size_t{0}},
         });
 
