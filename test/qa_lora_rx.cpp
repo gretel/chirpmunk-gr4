@@ -194,8 +194,8 @@ const boost::ut::suite<"CRC Verify RX"> crc_verif_rx_tests = [] {
 
         expect(ge(payload.size(), 2UZ)) << "payload must be >= 2 bytes for LoRa CRC";
 
-        // Compute plain CRC-16/XMODEM over all payload bytes (matching SX1262).
-        const uint16_t expected_crc = crc16(std::span<const uint8_t>(payload.data(), payload.size()));
+        // Compute LoRa payload CRC using the same function as the decoder.
+        const uint16_t expected_crc = lora_payload_crc(std::span<const uint8_t>(payload.data(), payload.size()));
 
         // Read the (whitened) CRC nibbles from the test vector.
         auto with_crc = load_u8("tx_03_with_crc.u8");
@@ -307,7 +307,7 @@ const boost::ut::suite<"Full RX pipeline (algorithm-level)"> full_rx_pipeline_te
         expect(ge(decoded_bytes.size(), static_cast<std::size_t>(hdr.payload_len) + 2)) << "Not enough decoded bytes for CRC check: " << decoded_bytes.size();
 
         if (hdr.has_crc && hdr.payload_len >= 2 && decoded_bytes.size() >= hdr.payload_len + 2u) {
-            uint16_t computed_crc = crc16(std::span<const uint8_t>(decoded_bytes.data(), hdr.payload_len));
+            uint16_t computed_crc = lora_payload_crc(std::span<const uint8_t>(decoded_bytes.data(), hdr.payload_len));
 
             uint16_t received_crc = static_cast<uint16_t>(static_cast<unsigned>(decoded_bytes[hdr.payload_len]) | (static_cast<unsigned>(decoded_bytes[hdr.payload_len + 1]) << 8));
 
