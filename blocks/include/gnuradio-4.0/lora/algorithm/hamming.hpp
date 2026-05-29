@@ -99,10 +99,10 @@ namespace gr::lora {
 
 /// Hamming LUT for soft ML decoding (cr >= 4/6).
 /// Each entry encodes [d0 d1 d2 d3 | p0 p1 p2 p3] = 8-bit codeword.
-inline constexpr std::array<uint8_t, 16> hamming_cw_LUT = {0, 139, 78, 197, 45, 166, 99, 232, 23, 156, 89, 210, 58, 177, 116, 255};
+inline constexpr std::array<uint8_t, 16> hamming_cw_LUT = {0, 23, 45, 58, 78, 89, 99, 116, 139, 156, 166, 177, 197, 210, 232, 255};
 
 /// Hamming LUT for soft ML decoding with CR = 4/5.
-inline constexpr std::array<uint8_t, 16> hamming_cw_LUT_cr5 = {0, 17, 9, 24, 5, 20, 12, 29, 3, 18, 10, 27, 6, 23, 15, 30};
+inline constexpr std::array<uint8_t, 16> hamming_cw_LUT_cr5 = {0, 24, 40, 48, 72, 80, 96, 120, 136, 144, 160, 184, 192, 216, 232, 240};
 
 /// Soft Hamming decode using ML-LUT: find the codeword with maximum likelihood.
 /// codeword_LLR has cw_len elements (cr_app + 4), positive LLR → bit 1 more likely.
@@ -130,7 +130,10 @@ inline constexpr std::array<uint8_t, 16> hamming_cw_LUT_cr5 = {0, 17, 9, 24, 5, 
     auto    idx_max   = static_cast<std::size_t>(it - cw_proba.begin());
     uint8_t data_soft = hamming_cw_LUT[idx_max] >> 4;
 
-    return data_soft;
+    // Reverse bit order (MSB<=>LSB within 4 bits) per LoRa convention
+    return static_cast<uint8_t>(((data_soft & 0b0001) << 3) | ((data_soft & 0b0010) << 1) // bit1 -> bit2
+                                | ((data_soft & 0b0100) >> 1)                             // bit2 -> bit1
+                                | ((data_soft & 0b1000) >> 3));
 }
 
 } // namespace gr::lora

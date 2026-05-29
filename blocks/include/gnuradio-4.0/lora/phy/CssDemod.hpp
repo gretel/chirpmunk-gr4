@@ -86,7 +86,7 @@ public:
         }
         auto&      fft = detail::FftPool::acquire(_cfg.sf);
         const auto dr  = gr::lora::dechirp_and_quality(symbol.data(), _cfo_downchirp.data(), _scratch.data(), _N, fft,
-            /*remove_dc=*/true);
+            /*remove_dc=*/false);
         r.bin          = static_cast<uint16_t>(dr.bin);
         r.pmr          = dr.pmr;
         // peak_mag_sq is diagnostic-only (not used by DecodeChain). Left at 0;
@@ -104,7 +104,7 @@ public:
             return r;
         }
         auto&      fft = detail::FftPool::acquire(_cfg.sf);
-        const auto dr  = gr::lora::dechirp_soft(symbol.data(), _cfo_downchirp.data(), _scratch.data(), _N, fft, _mag_sq.data(), /*remove_dc=*/true);
+        const auto dr  = gr::lora::dechirp_soft(symbol.data(), _cfo_downchirp.data(), _scratch.data(), _N, fft, _mag_sq.data());
         r.bin          = static_cast<uint16_t>(dr.bin);
         r.pmr          = dr.pmr;
         r.peak_mag_sq  = _mag_sq[dr.bin];

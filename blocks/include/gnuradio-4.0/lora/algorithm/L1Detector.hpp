@@ -176,8 +176,7 @@ struct L1Detector {
             const double binBw     = static_cast<double>(_cfg.sample_rate) / static_cast<double>(_cfg.l1_fft_size);
             const double usableBw  = static_cast<double>(_cfg.sample_rate) * static_cast<double>(_cfg.usable_fraction);
             const double bandStart = static_cast<double>(_cfg.center_freq) - usableBw / 2.0;
-            const auto   startBin  = static_cast<uint32_t>((static_cast<double>(_cfg.l1_fft_size) - usableBw / binBw) / 2.0);
-            return bandStart + static_cast<double>(_channelPeakBin[ch] - startBin) * binBw + binBw * 0.5;
+            return bandStart + static_cast<double>(_channelPeakBin[ch]) * binBw + binBw * 0.5;
         }
         return channelCenterFreq(ch);
     }

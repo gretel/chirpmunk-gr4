@@ -204,7 +204,7 @@ public:
     /// Compute CAD detection threshold per Vangelista & Calvagno (2022).
     /// α = sqrt(−(4/π)·ln(1−(1−p_fa)^{1/L})), where L = os_factor × M.
     /// Higher SF → more bins (M = 2^SF) → higher alpha for same P_fa.
-    [[nodiscard]] static float compute_alpha(uint32_t sfVal, uint32_t osf, float p_fa = 0.01f) {
+    [[nodiscard]] static float compute_alpha(uint32_t sfVal, uint32_t osf, float p_fa = 0.001f) {
         const double M     = static_cast<double>(1U << sfVal);
         const double L     = static_cast<double>(osf) * M;
         const double inner = 1.0 - std::pow(1.0 - static_cast<double>(p_fa), 1.0 / L);
@@ -217,7 +217,7 @@ public:
         if (sfVal < 7U || sfVal > 12U) {
             return 0.F;
         }
-        return compute_alpha(sfVal, 1U, 0.01f);
+        return compute_alpha(sfVal, 1U, 0.001f);
     }
 
     /// Compute the best peak_ratio across os_factor sub-chip timing offsets.

@@ -85,10 +85,9 @@ struct PerSfDecoder {
     bool              aa_enabled = false;
 
     State    state              = State::Detect;
-    uint32_t sfd_tail_remaining   = 0; ///< samples left to skip after Lock
-    uint32_t stall_symbols        = 0; ///< OUTPUT-stage stall counter
-    uint32_t decim_phase          = 0; ///< decimation phase offset (0..os-1) after Lock
-    uint32_t output_symbol_count  = 0; ///< symbols pushed in current Output run (for header diag)
+    uint32_t sfd_tail_remaining = 0; ///< samples left to skip after Lock
+    uint32_t stall_symbols      = 0; ///< OUTPUT-stage stall counter
+    uint32_t decim_phase        = 0; ///< decimation phase offset (0..os-1) after Lock
     float    cached_snr_db      = 0.f;
     float    cached_noise_db    = -999.f;                            ///< noise floor from PreambleSync
     float    cached_peak_db     = -999.f;                            ///< peak power from PreambleSync
@@ -97,7 +96,7 @@ struct PerSfDecoder {
     float    cached_sfo_hat     = 0.f;                               ///< SFO estimate (derived from CFO)
     uint32_t cached_sync_word   = phy::SyncResult::kSyncWordUnknown; ///< promiscuous only
 
-    void init(uint8_t sf_, uint32_t bandwidth, uint8_t os, uint16_t preamble, uint16_t sync_word, double p_false_alarm, bool promiscuous = false, bool use_aa_filter = false, bool decode_debug = false, bool implicit_header_ = false, uint8_t implicit_cr_ = 1, uint16_t implicit_pay_len_ = 28) {
+    void init(uint8_t sf_, uint32_t bandwidth, uint8_t os, uint16_t preamble, uint16_t sync_word, double p_false_alarm, bool promiscuous = false, bool use_aa_filter = false) {
         sf        = sf_;
         N         = uint32_t{1} << sf_;
         os_factor = os;
@@ -109,7 +108,7 @@ struct PerSfDecoder {
         sc.preamble_len     = preamble;
         sc.sync_word        = sync_word;
         sc.p_false_alarm    = p_false_alarm;
-        sc.verify_threshold = false; // DISABLE Vangelista alpha gate — accept weak AA filter detections
+        sc.verify_threshold = true; // Vangelista alpha gate — reject noise-only detect
         sc.promiscuous      = promiscuous;
         sync.init(sc);
 
@@ -120,13 +119,9 @@ struct PerSfDecoder {
         demod.init(dc);
 
         phy::DecodeChain::Config ec;
-        ec.sf              = sf_;
-        ec.bandwidth_hz    = bandwidth;
-        ec.soft_decode     = false;
-        ec.debug           = decode_debug;
-        ec.implicit_header = implicit_header_;
-        ec.default_cr      = implicit_cr_;
-        ec.default_pay_len = implicit_pay_len_;
+        ec.sf           = sf_;
+        ec.bandwidth_hz = bandwidth;
+        ec.soft_decode  = false;
         decode.init(ec);
 
         phy::AntennaCombiner::Config ac;
@@ -160,9 +155,8 @@ struct PerSfDecoder {
         decode.reset();
         state              = State::Detect;
         sfd_tail_remaining = 0;
-        stall_symbols        = 0;
-        decim_phase          = 0;
-        output_symbol_count  = 0;
+        stall_symbols      = 0;
+        decim_phase        = 0;
         cached_snr_db      = 0.f;
         cached_noise_db    = -999.f;
         cached_peak_db     = -999.f;
@@ -187,15 +181,12 @@ struct MultiSfDecoder : public gr::Block<MultiSfDecoder, gr::NoTagPropagation> {
 
     // --- Settings ---
     uint32_t bandwidth    = 125000;
-    uint16_t sync_word         = 0x12;  ///< expected sync word (ignored when promiscuous)
-    bool     promiscuous       = false; ///< skip sync_word verify; surface observed in output tag
-    uint8_t  os_factor         = 4;
-    uint16_t preamble_len      = 8;
-    uint32_t center_freq       = 869618000;
-    int32_t  rx_channel        = -1;
-    bool     implicit_header   = false; ///< implicit header mode for SF8+ on some networks
-    uint8_t  implicit_cr       = 1;     ///< coding rate used when implicit_header=true
-    uint16_t implicit_pay_len  = 28;    ///< payload length used when implicit_header=true
+    uint16_t sync_word    = 0x12;  ///< expected sync word (ignored when promiscuous)
+    bool     promiscuous  = false; ///< skip sync_word verify; surface observed in output tag
+    uint8_t  os_factor    = 4;
+    uint16_t preamble_len = 8;
+    uint32_t center_freq  = 869618000;
+    int32_t  rx_channel   = -1;
     /// Explicit SF subset to decode.  Empty = sweep SF7-12.  Allows
     /// non-contiguous subsets (e.g. [8, 11]).  Each entry must be in [7..12].
     std::vector<uint8_t> sf_set{};
@@ -214,7 +205,7 @@ struct MultiSfDecoder : public gr::Block<MultiSfDecoder, gr::NoTagPropagation> {
     /// decoder keeps the old behaviour exactly.
     bool use_aa_filter = false;
 
-    GR_MAKE_REFLECTABLE(MultiSfDecoder, in, out, msg_out, bandwidth, sync_word, promiscuous, os_factor, preamble_len, center_freq, rx_channel, sf_set, min_snr_db, max_symbols, soft_decode, p_false_alarm, debug, use_aa_filter, implicit_header, implicit_cr, implicit_pay_len);
+    GR_MAKE_REFLECTABLE(MultiSfDecoder, in, out, msg_out, bandwidth, sync_word, promiscuous, os_factor, preamble_len, center_freq, rx_channel, sf_set, min_snr_db, max_symbols, soft_decode, p_false_alarm, debug, use_aa_filter);
 
     std::vector<PerSfDecoder>                    _lanes;
     uint32_t                                     _min_sps      = 0;
@@ -222,7 +213,7 @@ struct MultiSfDecoder : public gr::Block<MultiSfDecoder, gr::NoTagPropagation> {
     std::function<void(const gr::property_map&)> _telemetry;
     std::shared_ptr<SpectrumState>               _spectrum_state;
 
-    // Upstream timing-tag cache (from SoapyDevSource ppm_estimator).
+    // Upstream timing-tag cache (from SoapySource ppm_estimator).
     // Re-emitted on each frame so FrameSink can record the exact sample
     // rate / ppm-corrected frequency the frame was sampled at.
     // Task 7 (FrameSink) consumes these via the same tag keys.
@@ -264,7 +255,6 @@ struct MultiSfDecoder : public gr::Block<MultiSfDecoder, gr::NoTagPropagation> {
             effective_sfs = {7, 8, 9, 10, 11, 12};
         }
         for (uint8_t s : effective_sfs) {
-            (void)s;
             assert(s >= 7 && s <= 12);
         }
 
@@ -272,7 +262,7 @@ struct MultiSfDecoder : public gr::Block<MultiSfDecoder, gr::NoTagPropagation> {
         _lanes.reserve(effective_sfs.size());
         for (uint8_t s : effective_sfs) {
             _lanes.emplace_back();
-            _lanes.back().init(s, bandwidth, os_factor, preamble_len, sync_word, p_false_alarm, promiscuous, use_aa_filter, debug, implicit_header, implicit_cr, implicit_pay_len);
+            _lanes.back().init(s, bandwidth, os_factor, preamble_len, sync_word, p_false_alarm, promiscuous, use_aa_filter);
         }
         // _min_sps = sps of the smallest SF in the set (drives gating).
         _min_sps            = std::numeric_limits<uint32_t>::max();
@@ -286,19 +276,21 @@ struct MultiSfDecoder : public gr::Block<MultiSfDecoder, gr::NoTagPropagation> {
         }
 
         if (isStartup) {
-            // Gate the scheduler on the SMALLEST SF's sps. Each lane has its
-            // own accumulator (lane.accum) that buffers samples across calls
-            // until it has lane.sps for one symbol — so a small in.min_samples
-            // is correct: it just means SF12 fills over multiple processBulk
-            // calls before producing a symbol.
+            // Gate the scheduler on the worst-case SF-sps so every lane can
+            // always consume at least one symbol from the input buffer.
             //
-            // Earlier this gate was `worst_sps = (1<<max_sf) * os_factor`. At
-            // os=64 (4 MS/s / 62.5 kHz BW) and SF12 cap that's 262144 samples,
-            // which empirically wedges the GR4 scheduler even when the
-            // upstream Edge buffer was sized to 2× that — the reader gate
-            // never unlocks.  Smallest-sps gate is buffer-size-independent.
-            (void)max_sf_used;
-            in.min_samples = static_cast<std::size_t>(_min_sps);
+            // Do NOT add a fudge factor: gr::Graph allocates the upstream
+            // edge buffer at the default Graph::defaultMinBufferSize (65536
+            // cf32 samples for arithmetic-like types). `in.min_samples`
+            // greater than that capacity wedges the scheduler — the buffer
+            // can never hold enough samples to unblock processBulk.
+            //
+            // Buffer sizing is edge-driven (Graph::calculateStreamBufferSize
+            // walks Edge::minBufferSize), not port-driven — the previous
+            // `+ 2*os_factor` slack changed the scheduler gate but did not
+            // grow the buffer, so it only ever hurt.
+            const auto worst_sps = static_cast<uint32_t>((1u << max_sf_used) * os_factor);
+            in.min_samples       = worst_sps;
         }
     }
 
@@ -425,22 +417,8 @@ private:
                     lane.resetLane();
                     return lane.sps;
                 }
-                // CFO correction: apply PreambleSync estimate (cfo_int, cfo_frac)
-                // to the downchirp reference so subsequent dechirp+FFT resolves
-                // bins at the correct position. Without this, any carrier
-                // frequency offset shifts the FFT argmax and corrupts both
-                // header and payload decode.
-                //
-                // When AA filter is active, add filter group-delay offset
-                // (6-stage cascade shifts dechirped peak by 12 bins — verified
-                // in Python simulation).
-                float       cfo_frac_corr = r.cfo_frac;
-                int32_t     cfo_int_corr  = r.cfo_int;
-                if (lane.aa_enabled) {
-                    const int32_t filter_delay_bins = 12;
-                    cfo_int_corr += filter_delay_bins;
-                }
-                lane.demod.set_cfo_correction(cfo_frac_corr, cfo_int_corr);
+                // Promote CFO/STO into the downstream demodulator.
+                lane.demod.set_cfo_correction(r.cfo_frac, r.cfo_int);
                 lane.cached_snr_db = r.snr_db;
                 // SyncResult noise_db/peak_db are raw FFT magnitudes;
                 // convert to dBFS (20·log10) for the dashboard.
@@ -485,54 +463,37 @@ private:
                         tail = 0;
                     }
                 } else {
-                    // Combined integer + fractional STO correction for os > 1.
+                    // Integer + fractional STO correction for os > 1.
                     //
-                    // WRAP sto_int + sto_frac into [-N/2, N/2) first, THEN
-                    // scale by os_factor. This avoids the sto_int=255
-                    // wrapping bug: sto_int=255 + sto_frac=0.25 at N=256
-                    // represents -0.75 Nyquist samples (= 3 oversampled),
-                    // but separate handling gives tau_late=4 (wrong).
-                    const double os_d = static_cast<double>(lane.os_factor);
-                    const double N_d  = static_cast<double>(lane.N);
+                    // Same formula as the os=1 path above, but every
+                    // Nyquist-domain offset is scaled by os_factor to
+                    // produce oversampled-domain sample counts.
+                    const int32_t os_int = static_cast<int32_t>(lane.os_factor);
+                    const int32_t N_int  = static_cast<int32_t>(lane.N);
 
-                    double sto_total = static_cast<double>(r.sto_int) + static_cast<double>(r.sto_frac);
-                    // PreambleSync's Eq. 20 uses the raw dechirped FFT
-                    // (no CFO correction), so fractional CFO biases the
-                    // fractional STO estimate by the same amount.
-                    // Subtract cfo_frac to decouple: sto_frac_observed ≈
-                    // sto_frac_true + cfo_frac (when both are small).
-                    sto_total -= static_cast<double>(r.cfo_frac);
-                    if (sto_total > N_d / 2.0) sto_total -= N_d;
-                    if (sto_total < -N_d / 2.0) sto_total += N_d;
+                    // Integer STO: same wrap logic as os=1.
+                    if (r.sto_int > N_int / 2) {
+                        tau_late = (N_int - r.sto_int) * os_int;
+                    } else {
+                        tau_late = -static_cast<int32_t>(r.sto_int) * os_int;
+                    }
 
-                    // Convert to oversampled-domain correction. Negate:
-                    // positive sto_total = signal is early → shift grid
-                    // backward (negative tau). Negative sto_total = signal
-                    // is late → extend tail (positive tau).
-                    const int32_t tau_total = static_cast<int32_t>(std::round(-sto_total * os_d));
-                    tail += tau_total;
+                    // Compensate sto_frac by subtracting cfo_frac to account
+                    // for the CFO-STO bias in 3-bin interpolation (Eq. 20).
+                    {
+                        float   sto_corrected = r.sto_frac - r.cfo_frac;
+                        int32_t frac_corr     = static_cast<int32_t>(std::lround(static_cast<double>(sto_corrected) * static_cast<double>(os_int)));
+                        frac_corr             = std::clamp(frac_corr, -os_int, os_int);
+                        tau_late -= frac_corr;
+                    }
+
+                    tail += tau_late;
                     if (tail < 0) {
                         tail = 0;
                     }
-                    // tau_total absorbs the full STO (integer + fractional),
-                    // so decim_phase must be 0 to avoid double-compensation.
-                    lane.decim_phase = 0;
                 }
                 lane.sfd_tail_remaining     = static_cast<uint32_t>(tail);
                 lane.state                  = PerSfDecoder::State::SkipSfdTail;
-                // Align stride decimation grid to fractional STO.
-                // For os > 1: the combined formula above already sets
-                // decim_phase = 0 (tau_total absorbs full STO).
-                // For os = 1: decim_phase is always 0 (one sample per
-                // Nyquist symbol), so no correction needed.
-                // The legacy separate sto_frac-based decim_phase is
-                // kept only for the os=1 path where it's harmless.
-                if (lane.os_factor == 1u) {
-                    auto frac_phase = std::round(-static_cast<double>(r.sto_frac) * static_cast<double>(lane.os_factor));
-                    auto iphase      = static_cast<int32_t>(frac_phase) % static_cast<int32_t>(lane.os_factor);
-                    if (iphase < 0) iphase += static_cast<int32_t>(lane.os_factor);
-                    lane.decim_phase = static_cast<uint32_t>(iphase);
-                }
                 const uint32_t nominal_tail = lane.sps + lane.sps / 4u;
                 if (debug) {
                     gr::lora::log_ts("debug", "multisf",
@@ -589,30 +550,13 @@ private:
         }
 
         auto demod_result = lane.demod.demodHard(std::span<const cf32>(lane.nyquist_buf));
-        // Per-symbol header diagnostic: log raw bin + PMR for first 8
-        // symbols of each frame so we can compare tezuka (stride) vs
-        // loopback (no stride) PMR distributions.
-        const bool in_header = lane.output_symbol_count < 8;
-        if (debug && in_header) {
-            gr::lora::log_ts("debug", "multisf",
-                "HDR_SYM sf=%u sym=%u raw_bin=%u pmr=%.2f snr=%.1fdB",
-                lane.sf, lane.output_symbol_count, demod_result.bin,
-                static_cast<double>(demod_result.pmr),
-                static_cast<double>(lane.cached_snr_db));
-        }
-        ++lane.output_symbol_count;
         if (auto frame = lane.decode.push_symbol(demod_result.bin); frame.has_value()) {
             if (!frame->header_valid || frame->payload.empty()) {
-                uint16_t adj = (demod_result.bin == 0) ? static_cast<uint16_t>(lane.N - 1) : static_cast<uint16_t>(demod_result.bin - 1);
-                adj = static_cast<uint16_t>(adj ^ (adj >> 1));
-                std::fprintf(stderr, "DROP sf=%u bw=%u header_valid=%d pay_len=%u cr=%u crc=%d snr=%.1fdB raw_bin=%u adj_bin=%u\n",
-                    lane.sf, bandwidth, frame->header_valid, static_cast<unsigned>(frame->payload_len), static_cast<unsigned>(frame->cr), frame->crc_valid, static_cast<double>(lane.cached_snr_db), demod_result.bin, adj);
-                std::fflush(stderr);
                 if (debug) {
                     gr::lora::log_ts("debug", "multisf",
                         "DROP sf=%u bw=%u header_valid=%d pay_len=%u "
-                        "cr=%u crc=%d snr=%.1fdB raw_bin=%u adj_bin=%u",
-                        lane.sf, bandwidth, frame->header_valid, static_cast<unsigned>(frame->payload_len), static_cast<unsigned>(frame->cr), frame->crc_valid, static_cast<double>(lane.cached_snr_db), demod_result.bin, adj);
+                        "cr=%u crc=%d snr=%.1fdB",
+                        lane.sf, bandwidth, frame->header_valid, static_cast<unsigned>(frame->payload_len), static_cast<unsigned>(frame->cr), frame->crc_valid, static_cast<double>(lane.cached_snr_db));
                 }
             }
             emitFrame(lane, *frame, out_span, out_idx);
@@ -647,12 +591,6 @@ private:
         const uint32_t    phase = lane.decim_phase;
         const std::size_t start = in_offset + phase;
         const std::size_t end   = std::min(start + lane.sps, in_span.size());
-        // DEBUG: trace all AA calls to see if SF8 ever enters (disabled)
-        if (false && lane.sf >= 8) {
-            std::fprintf(stderr, "AA_ENTER sf=%u os=%u in_off=%zu phase=%u start=%zu end=%zu span=%zu sps=%u\n",
-                lane.sf, os, in_offset, phase, start, end, in_span.size(), lane.sps);
-            std::fflush(stderr);
-        }
         if (end <= start) {
             // Not enough data; zero-fill Nyquist buffer as the stride
             // path would.
@@ -667,21 +605,8 @@ private:
         // processBatch emits floor(sps / os) ≈ N samples on steady-state
         // input; the first few calls after reset produce fewer due to the
         // stage delay-line fill. Zero-fill any tail short of N.
-        if (false && lane.aa_out.size() < lane.N) {
-            std::fprintf(stderr, "AA sf=%u os=%u in=%zu out=%zu need=%u zero_fill=%zu\n",
-                lane.sf, lane.os_factor, window.size(), lane.aa_out.size(), lane.N, lane.N - lane.aa_out.size());
-            std::fflush(stderr);
-        }
         const auto n_copy = std::min<std::size_t>(lane.aa_out.size(), lane.N);
         std::copy_n(lane.aa_out.begin(), n_copy, lane.nyquist_buf.begin());
-        // DEBUG: log Nyquist magnitude for SF7 vs SF8 comparison (disabled)
-        if (false && n_copy > 0 && (lane.sf == 7 || lane.sf == 8)) {
-            float sum_mag = 0.f;
-            for (std::size_t j = 0; j < n_copy; ++j) sum_mag += std::abs(lane.nyquist_buf[j]);
-            std::fprintf(stderr, "AA_MAG sf=%u os=%u avg_mag=%.6f first_mag=%.6f\n",
-                lane.sf, os, static_cast<double>(sum_mag / static_cast<float>(n_copy)), static_cast<double>(std::abs(lane.nyquist_buf[0])));
-            std::fflush(stderr);
-        }
         if (n_copy < lane.N) {
             std::fill(lane.nyquist_buf.begin() + static_cast<std::ptrdiff_t>(n_copy), lane.nyquist_buf.end(), cf32{0.f, 0.f});
         }
