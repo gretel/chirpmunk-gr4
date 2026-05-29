@@ -52,12 +52,12 @@
 #include <gnuradio-4.0/lora/algorithm/tx_chain.hpp>
 #include <gnuradio-4.0/lora/tx_burst_taper.hpp>
 
-// graph_builder.hpp includes SoapyDevSource.hpp which defines detail::equalWithinOnePercent
-// — must come before SoapyDevSink.hpp which uses it
+// graph_builder.hpp includes SoapySource.hpp which defines detail::equalWithinOnePercent
+// — must come before SoapySink.hpp which uses it
 #include "graph_builder.hpp"
 #include "tx_worker.hpp"
 #include "udp_state.hpp"
-#include <gnuradio-4.0/soapysdr/SoapyDevSink.hpp>
+#include <gnuradio-4.0/sdr/SoapySink.hpp>
 #if GR4_LORA_HAS_IIO
 #include <gnuradio-4.0/iio/IIOSink.hpp>
 #endif
@@ -92,7 +92,7 @@ using cf32 = std::complex<float>;
 //   TxQueueSource(out1=zeros) -> NullSink<cf32>(in)
 //
 // build_tx_graph receives the TX channel count from log_hardware_info and
-// picks the matching SoapyDevSink template instantiation.  TxQueueSource always
+// picks the matching SoapySink template instantiation.  TxQueueSource always
 // emits IQ on out0 and zeros on out1 in lockstep; in the single-channel case
 // out1 is drained into a NullSink so the scheduler has a valid consumer for
 // every port.
@@ -176,7 +176,7 @@ std::unique_ptr<gr::scheduler::Simple<gr::scheduler::ExecutionPolicy::singleThre
     } else
 #endif
     if (dualTx) {
-        auto& sink = graph.emplaceBlock<gr::incubator::soapysdr::SoapyDualSink<cf32>>({
+        auto& sink = graph.emplaceBlock<gr::blocks::sdr::SoapyDualSink<cf32>>({
             {"device", cfg.device},
             {"device_parameter", cfg.device_param},
             {"sample_rate", cfg.rate},
@@ -212,7 +212,7 @@ std::unique_ptr<gr::scheduler::Simple<gr::scheduler::ExecutionPolicy::singleThre
             gr::lora::log_ts("error", "lora_trx", "tx_channel %u but device has only %zu TX channel(s)", cfg.tx_channel, nTxChannels);
             return nullptr;
         }
-        auto& sink = graph.emplaceBlock<gr::incubator::soapysdr::SoapySimpleSink<cf32>>({
+        auto& sink = graph.emplaceBlock<gr::blocks::sdr::SoapySimpleSink<cf32>>({
             {"device", cfg.device},
             {"device_parameter", cfg.device_param},
             {"sample_rate", cfg.rate},
@@ -517,7 +517,7 @@ int main(int argc, char* argv[]) {
     };
 
     // --- Build persistent TX graph ---
-    // SoapyDevSink stays open for the process lifetime; TxQueueSource receives
+    // SoapySink stays open for the process lifetime; TxQueueSource receives
     // bursts from the UDP loop thread via push() + notifyProgress().
     // The TX thread is launched AFTER the RX scheduler (see below) so that
     // DeviceRegistry coordinates both streams before either activates.
@@ -535,8 +535,8 @@ int main(int argc, char* argv[]) {
             gr::lora::log_ts("warn ", "lora_trx", "failed to build TX graph — continuing RX-only");
         }
         // TX thread is launched AFTER the RX scheduler starts (below).
-        // This ensures the RX SoapyDevSource calls DeviceRegistry::findOrCreate
-        // before the TX SoapyDevSink calls registerActivation — so both streams
+        // This ensures the RX SoapySource calls DeviceRegistry::findOrCreate
+        // before the TX SoapySink calls registerActivation — so both streams
         // are set up before either is activated.  Without this ordering,
         // TX would activate alone (pendingUsers→0) and UHD would reject
         // the subsequent RX setupStream ("2 RX 1 TX not possible" on B210).
@@ -619,7 +619,7 @@ int main(int argc, char* argv[]) {
     auto  iio_blk     = lora_graph::find_iio_source(rx_sched.blocks());
     gr::lora::log_ts("debug", "lora_trx", "rx graph   %zu MultiSfDecoder, soapy=%s iio=%s", rx_blocks.multisf_decoders.size(), rx_blocks.soapy_source ? "yes" : "no", iio_blk ? "yes" : "no");
 
-    // Launch RX scheduler FIRST so its SoapyDevSource::findOrCreate registers
+    // Launch RX scheduler FIRST so its SoapySource::findOrCreate registers
     // on the DeviceRegistry before TX's registerActivation fires.  This
     // ensures pendingUsers >= 2 and BOTH streams are set up before either
     // is activated — required by B210 which only supports symmetric 2T2R
