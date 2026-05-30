@@ -434,6 +434,36 @@ def companion_apply_and_advert(
     return True, ok
 
 
+async def companion_apply_and_advert_async(
+    point: ConfigPoint,
+    companion: MeshCoreCompanion,
+    *,
+    tx_repeats: int = 3,
+    gap_s: float = 2.0,
+    settle_s: float = SETTLE_S,
+    pre_send: Callable[[], object] | None = None,
+) -> tuple[bool, int]:
+    """Async version of companion_apply_and_advert for MeshCoreCompanion.
+
+    Same logic as the sync version but awaits async companion methods.
+    """
+    bw_khz = point.bw / 1000.0
+    if not await companion.set_radio(point.freq_mhz, bw_khz, point.sf, cr=point.cr):
+        return False, 0
+    if not await companion.set_tx_power(point.tx_power):
+        err(f"set_tx_power({point.tx_power}) failed")
+    await asyncio.sleep(settle_s)
+    if pre_send is not None:
+        pre_send()
+    ok = 0
+    for i in range(tx_repeats):
+        if await companion.send_advert():
+            ok += 1
+        if i < tx_repeats - 1:
+            await asyncio.sleep(gap_s)
+    return True, ok
+
+
 # ---- CBOR event collector --------------------------------------------------
 
 
@@ -650,6 +680,121 @@ class MeshCoreCompanion:  # pragma: no cover  # meshcore_py wrapper, hw-only
             info(f"  send_message failed: {e}")
             return False
 
+    async def set_tx_power(self, dbm: int) -> bool:
+        from meshcore.events import EventType  # type: ignore[import-not-found]
+
+        assert self._mc is not None
+        try:
+            result = await self._mc.commands.set_tx_power(dbm)
+            return result.type == EventType.OK
+        except Exception as e:
+            info(f"  set_tx_power failed: {e}")
+            return False
+
+    async def send_chan_msg(self, channel_name: str, text: str) -> bool:
+        from meshcore.events import EventType  # type: ignore[import-not-found]
+
+        assert self._mc is not None
+        try:
+            channels = self._mc.known_channels
+            idx = None
+            for ch in channels:
+                if ch.get("name", "").lower() == channel_name.lower():
+                    idx = ch["idx"]
+                    break
+            if idx is None:
+                info(f"  channel '{channel_name}' not found")
+                return False
+            result = await self._mc.commands.send_chan_msg(idx, text)
+            return result.type != EventType.ERROR
+        except Exception as e:
+            info(f"  send_chan_msg failed: {e}")
+            return False
+
+    async def get_radio(self) -> str:
+        from meshcore.events import EventType  # type: ignore[import-not-found]
+
+        assert self._mc is not None
+        try:
+            result = await self._mc.commands.send_appstart()
+            if result.type != EventType.SELF_INFO:
+                return ""
+            p = result.payload
+            freq_hz = int(p.get("freq", 0) * 1e6)
+            bw_hz = int(p.get("bw", 0) * 1e3)
+            sf = p.get("sf", 0)
+            cr = p.get("cr", 0)
+            tx_gain = p.get("tx_gain", 0)
+            return f"freq={freq_hz} bw={bw_hz} sf={sf} cr={cr} tx_gain={tx_gain}"
+        except Exception as e:
+            info(f"  get_radio failed: {e}")
+            return ""
+
+    async def get_contacts(self) -> str:
+        from meshcore.events import EventType  # type: ignore[import-not-found]
+
+        assert self._mc is not None
+        try:
+            result = await self._mc.commands.get_contacts(timeout=5)
+            if result.type == EventType.CONTACTS:
+                contacts = result.payload.get("contacts", [])
+                return "\n".join(c.get("public_key", "")[:12] for c in contacts)
+            return ""
+        except Exception as e:
+            info(f"  get_contacts failed: {e}")
+            return ""
+
+    async def get_card(self) -> str:
+        from meshcore.events import EventType  # type: ignore[import-not-found]
+
+        assert self._mc is not None
+        try:
+            result = await self._mc.commands.export_contact()
+            if result.type == EventType.CONTACT_URI:
+                return result.payload.get("uri", "")
+            return ""
+        except Exception as e:
+            info(f"  get_card failed: {e}")
+            return ""
+
+    async def recv_msg(self, timeout: float = 5.0) -> str:
+        from meshcore.events import EventType  # type: ignore[import-not-found]
+
+        assert self._mc is not None
+        try:
+            result = await self._mc.commands.get_msg(timeout=timeout)
+            if result.type in (EventType.CONTACT_MSG_RECV, EventType.CHANNEL_MSG_RECV):
+                return result.payload.get("text", "")
+            return ""
+        except Exception as e:
+            info(f"  recv_msg failed: {e}")
+            return ""
+
+    async def send_msg_by_name(self, contact_name: str, text: str) -> tuple[bool, str]:
+        from meshcore.events import EventType  # type: ignore[import-not-found]
+
+        assert self._mc is not None
+        try:
+            contacts_result = await self._mc.commands.get_contacts(timeout=5)
+            if contacts_result.type != EventType.CONTACTS:
+                return False, "no contacts"
+            contacts = contacts_result.payload.get("contacts", [])
+            target = None
+            for c in contacts:
+                name = c.get("adv_name", "")
+                if name.lower().startswith(contact_name.lower()):
+                    target = c
+                    break
+            if target is None:
+                return False, f"contact '{contact_name}' not found"
+            pubkey = bytes.fromhex(target["public_key"])
+            result = await self._mc.commands.send_msg(pubkey, text)
+            acked = result.type == EventType.MSG_SENT
+            return acked, "acked" if acked else "failed"
+        except Exception as e:
+            info(f"  send_msg_by_name failed: {e}")
+            return False, str(e)
+
     def drain_adverts(self) -> list[dict[str, Any]]:
         with self._lock:
             out = self._adverts
@@ -687,6 +832,7 @@ __all__ = [
     "assert_alive",
     "assert_all_alive",
     "companion_apply_and_advert",
+    "companion_apply_and_advert_async",
     "spawn_lora_core",
     "spawn_meshcore_bridge",
     "spawn_sdr_binary",
