@@ -150,7 +150,8 @@ class TestRunDecodePoint:
         sent = [c for c in comp._calls if c[0] == "send_advert"]
         assert len(sent) == 3
 class TestRunScanPoint:
-    def test_set_radio_failure_short_circuits(self, monkeypatch: Any) -> None:
+    @pytest.mark.asyncio
+    async def test_set_radio_failure_short_circuits(self, monkeypatch: Any) -> None:
         monkeypatch.setattr("time.sleep", lambda *_a, **_k: None)
         comp = _make_stub_companion(set_radio=False)
         recv, _port = _free_port()
@@ -159,7 +160,7 @@ class TestRunScanPoint:
             collector.start()
             try:
                 p = ConfigPoint(sf=8, bw=62500, freq_mhz=869.618)
-                result = _run_scan_point(p, comp, collector, tuning_scan=False)
+                result = await _run_scan_point(p, comp, collector, tuning_scan=False)
             finally:
                 collector.stop()
         finally:
