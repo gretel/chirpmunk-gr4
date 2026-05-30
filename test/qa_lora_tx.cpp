@@ -108,12 +108,20 @@ const boost::ut::suite<"TX add_crc"> tx_add_crc_tests = [] {
         }
     };
 
-    "add_crc() with 1-byte payload appends nothing"_test = [] {
-        // The LoRa CRC uses last-2-byte XOR, so payload < 2 bytes -> no CRC
+    "add_crc() with 1-byte payload appends 4 nibbles (CRC-16/XMODEM fallback)"_test = [] {
+        // Payload < 2 bytes uses standard CRC-16/XMODEM (XOR variant
+        // needs ≥2 bytes for the tail XOR). Verify 4 nibbles are appended
+        // and the first nibbles are unchanged.
         std::vector<uint8_t> nibbles = {0x1, 0x2, 0x3, 0x4, 0x5, 0xA, 0xB};
         std::vector<uint8_t> payload = {0x42};
         auto                 result  = add_crc(nibbles, payload, true);
-        expect(eq(result.size(), nibbles.size())) << "1-byte payload: no CRC even with has_crc=true";
+        expect(eq(result.size(), nibbles.size() + 4u)) << "1-byte payload: 4 CRC nibbles (CRC-16/XMODEM fallback)";
+        // First nibbles unchanged
+        for (std::size_t i = 0; i < nibbles.size(); i++) {
+            expect(eq(result[i], nibbles[i]));
+        }
+        // CRC nibbles are non-zero (CRC-16/XMODEM of {0x42} != 0)
+        expect(result[7] != 0 || result[8] != 0 || result[9] != 0 || result[10] != 0) << "CRC should be non-zero";
     };
 
     "add_crc() appends exactly 4 nibbles"_test = [] {

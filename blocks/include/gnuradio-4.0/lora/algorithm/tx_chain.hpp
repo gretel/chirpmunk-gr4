@@ -71,21 +71,18 @@ namespace gr::lora {
     return result;
 }
 
-/// Append CRC-16/XMODEM as 4 whitened nibbles.
-/// CRC nibbles are whitened with the same continuous LFSR sequence used
-/// for payload bytes, making TX compatible with SX1262 receivers which
-/// whiten the entire data stream including CRC.
+/// Append LoRa payload CRC as 4 unwhitened nibbles.
+/// Uses the LoRa-specific XOR variant (CRC-16/XMODEM over first pay_len-2
+/// bytes XORed with last 2 payload bytes, matching MeshCore companion).
+/// Falls back to standard CRC-16/XMODEM for payloads < 2 bytes (the XOR
+/// variant needs ≥2 bytes for the tail XOR).
+/// CRC nibbles are NOT whitened because dewhiten() only covers pay_len
+/// bytes (see tx_chain.hpp:46-47) — whitening CRC would mismatch decoder.
 [[nodiscard]] inline std::vector<uint8_t> add_crc(std::span<const uint8_t> with_header, std::span<const uint8_t> payload, bool has_crc) {
     std::vector<uint8_t> result(with_header.begin(), with_header.end());
-    if (has_crc && payload.size() >= 2) {
-        auto nibs = crc_to_nibbles(lora_payload_crc(payload));
-        // Whitening sequence continues from payload: CRC bytes at index
-        // pay_len and pay_len+1 use whitening_seq[pay_len..pay_len+1].
-        for (std::size_t byte_idx = 0u; byte_idx < 2u; ++byte_idx) {
-            const uint8_t ws = whitening_seq[(payload.size() + byte_idx) % whitening_seq.size()];
-            nibs[byte_idx * 2u] ^= (ws & 0x0F);
-            nibs[byte_idx * 2u + 1u] ^= ((ws >> 4u) & 0x0F);
-        }
+    if (has_crc) {
+        const auto crc_val = (payload.size() >= 2) ? lora_payload_crc(payload) : crc16(payload);
+        auto nibs = crc_to_nibbles(crc_val);
         result.insert(result.end(), nibs.begin(), nibs.end());
     }
     return result;

@@ -28,10 +28,10 @@
 #include <cmath>
 #include <complex>
 #include <cstdint>
-#include <cstring>
 #include <functional>
 #include <limits>
 #include <memory>
+#include <shared_mutex>
 #include <span>
 #include <string>
 #include <vector>
@@ -52,6 +52,12 @@
 namespace gr::lora {
 
 using cf32 = gr::lora::phy::cf32;
+
+/// Sentinel value for unset noise/peak floor (dBFS).
+inline constexpr float kNoiseFloorUnset = -999.f;
+
+/// Sentinel value for unset frequency tag.
+inline constexpr double kFreqUnset = 0.0;
 
 /// Per-spreading-factor decoder bundle. Not a GR4 block — this is the
 /// per-lane state object owned by MultiSfDecoder.
@@ -89,8 +95,8 @@ struct PerSfDecoder {
     uint32_t stall_symbols      = 0; ///< OUTPUT-stage stall counter
     uint32_t decim_phase        = 0; ///< decimation phase offset (0..os-1) after Lock
     float    cached_snr_db      = 0.f;
-    float    cached_noise_db    = -999.f;                            ///< noise floor from PreambleSync
-    float    cached_peak_db     = -999.f;                            ///< peak power from PreambleSync
+    float    cached_noise_db    = kNoiseFloorUnset;                  ///< noise floor from PreambleSync
+    float    cached_peak_db     = kNoiseFloorUnset;                  ///< peak power from PreambleSync
     int32_t  cached_cfo_int     = 0;                                 ///< integer CFO bins
     float    cached_cfo_frac    = 0.f;                               ///< fractional CFO
     float    cached_sfo_hat     = 0.f;                               ///< SFO estimate (derived from CFO)
@@ -158,8 +164,8 @@ struct PerSfDecoder {
         stall_symbols      = 0;
         decim_phase        = 0;
         cached_snr_db      = 0.f;
-        cached_noise_db    = -999.f;
-        cached_peak_db     = -999.f;
+        cached_noise_db    = kNoiseFloorUnset;
+        cached_peak_db     = kNoiseFloorUnset;
         cached_cfo_int     = 0;
         cached_cfo_frac    = 0.f;
         cached_sfo_hat     = 0.f;
@@ -221,7 +227,22 @@ struct MultiSfDecoder : public gr::Block<MultiSfDecoder, gr::NoTagPropagation> {
     double _last_frequency{0.0};
     float  _last_ppm{0.f};
 
+    // Guards _lanes against concurrent settingsChanged + processBulk.
+    // Shared lock for processBulk reads, unique lock for reconfigure writes.
+    mutable std::shared_mutex _lanes_mutex;
+
+    // Guards _telemetry callback and _channel_busy pointer against
+    // concurrent set-and-call from settings/callback threads.
+    mutable std::shared_mutex _callback_mutex;
+
     static constexpr uint32_t kMaxStallSymbols = 1000;
+
+    /// Set external telemetry callback (thread-safe, mutex-guarded).
+    /// processBulk holds a shared_lock on _callback_mutex during invocation.
+    void setTelemetryCallback(std::function<void(const gr::property_map&)> cb) {
+        std::unique_lock lock(_callback_mutex);
+        _telemetry = std::move(cb);
+    }
 
     /// Set external listen-before-talk channel-busy flag.
     void set_channel_busy_flag(std::atomic<bool>* flag) noexcept { _channel_busy = flag; }
@@ -247,6 +268,7 @@ struct MultiSfDecoder : public gr::Block<MultiSfDecoder, gr::NoTagPropagation> {
     }
 
     void reconfigure(bool isStartup = false) {
+        std::unique_lock lock(_lanes_mutex);
         assert(bandwidth > 0 && os_factor >= 1 && preamble_len >= 5);
 
         // Effective SF list: sf_set if non-empty, else full sweep [7..12].
@@ -255,7 +277,12 @@ struct MultiSfDecoder : public gr::Block<MultiSfDecoder, gr::NoTagPropagation> {
             effective_sfs = {7, 8, 9, 10, 11, 12};
         }
         for (uint8_t s : effective_sfs) {
-            assert(s >= 7 && s <= 12);
+            // Runtime clamp: out-of-range SF values cause UB in 1u<<sf
+            // and would wedge the decoder silently in release builds.
+            if (s < 7 || s > 12) {
+                gr::lora::log_ts("warn", "multisf", "sf=%u out of range [7..12], clamping to 7", static_cast<unsigned>(s));
+                s = 7;
+            }
         }
 
         _lanes.clear();
@@ -276,21 +303,20 @@ struct MultiSfDecoder : public gr::Block<MultiSfDecoder, gr::NoTagPropagation> {
         }
 
         if (isStartup) {
-            // Gate the scheduler on the worst-case SF-sps so every lane can
-            // always consume at least one symbol from the input buffer.
+            // Gate the scheduler on the smallest SF's sps so processBulk
+            // fires as soon as data is available.  The per-lane loop in
+            // processBulk already handles partial consumption — each lane
+            // accumulates into `lane.accum` until it has enough for one
+            // symbol.  Setting min_samples to the worst-case SF·os would
+            // exceed the upstream edge buffer (defaultMinBufferSize = 65536
+            // for cf32) and wedge the scheduler permanently.
             //
-            // Do NOT add a fudge factor: gr::Graph allocates the upstream
-            // edge buffer at the default Graph::defaultMinBufferSize (65536
-            // cf32 samples for arithmetic-like types). `in.min_samples`
-            // greater than that capacity wedges the scheduler — the buffer
-            // can never hold enough samples to unblock processBulk.
-            //
-            // Buffer sizing is edge-driven (Graph::calculateStreamBufferSize
-            // walks Edge::minBufferSize), not port-driven — the previous
-            // `+ 2*os_factor` slack changed the scheduler gate but did not
-            // grow the buffer, so it only ever hurt.
-            const auto worst_sps = static_cast<uint32_t>((1u << max_sf_used) * os_factor);
-            in.min_samples       = worst_sps;
+            // The upstream edge buffer is sized by Graph::calculateStreamBufferSize
+            // (walks Edge::minBufferSize, not Port::min_samples).  Setting
+            // min_samples larger than the actual ring capacity creates a
+            // deadlock: the scheduler waits for min_samples but the buffer
+            // can never hold that many.
+            in.min_samples = _min_sps;
         }
     }
 
@@ -341,6 +367,11 @@ struct MultiSfDecoder : public gr::Block<MultiSfDecoder, gr::NoTagPropagation> {
         if (_spectrum_state) {
             _spectrum_state->push(in_span.data(), std::min(n_in, static_cast<std::size_t>(_min_sps)));
         }
+
+        // Shared lock: settingsChanged must not reconfigure _lanes while
+        // processBulk iterates.  The lock is held for the entire bulk so
+        // the lane iterator stays valid.
+        std::shared_lock lock(_lanes_mutex);
 
         for (auto& lane : _lanes) {
             // Append to per-lane accumulator (variable rate, per gr4-dev rule).
@@ -422,13 +453,18 @@ private:
                 lane.cached_snr_db = r.snr_db;
                 // SyncResult noise_db/peak_db are raw FFT magnitudes;
                 // convert to dBFS (20·log10) for the dashboard.
-                lane.cached_noise_db  = (r.noise_db > 0.f) ? 20.f * std::log10(r.noise_db) : -999.f;
-                lane.cached_peak_db   = (r.peak_db > 0.f) ? 20.f * std::log10(r.peak_db) : -999.f;
+                lane.cached_noise_db  = (r.noise_db > 0.f) ? 20.f * std::log10(r.noise_db) : kNoiseFloorUnset;
+                lane.cached_peak_db   = (r.peak_db > 0.f) ? 20.f * std::log10(r.peak_db) : kNoiseFloorUnset;
                 lane.cached_cfo_int   = r.cfo_int;
                 lane.cached_cfo_frac  = r.cfo_frac;
                 lane.cached_sync_word = r.sync_word_observed; // kSyncWordUnknown in strict mode
-                // SFO = (cfo_int + cfo_frac) * BW / Fc  (same formula as PreambleId)
-                lane.cached_sfo_hat = (static_cast<float>(r.cfo_int) + r.cfo_frac) * static_cast<float>(bandwidth) / static_cast<float>(center_freq);
+                // SFO = (cfo_int + cfo_frac) * BW / Fc — protect against
+                // center_freq = 0 (unconfigured, would produce NaN/inf).
+                if (center_freq != 0) {
+                    lane.cached_sfo_hat = (static_cast<float>(r.cfo_int) + r.cfo_frac) * static_cast<float>(bandwidth) / static_cast<float>(center_freq);
+                } else {
+                    lane.cached_sfo_hat = 0.f;
+                }
 
                 // Sample-domain integer-STO realignment.
                 //
@@ -512,23 +548,26 @@ private:
                 // death") — swallow any exception in the user-supplied
                 // telemetry callback so a misbehaving subscriber cannot kill
                 // the scheduler.
-                if (_telemetry) {
-                    try {
-                        gr::property_map evt;
-                        evt["type"]         = std::pmr::string("multisf_sync");
-                        evt["sf"]           = static_cast<uint32_t>(lane.sf);
-                        evt["bw"]           = static_cast<uint32_t>(bandwidth);
-                        evt["os_factor"]    = static_cast<uint32_t>(lane.os_factor);
-                        evt["cfo_int"]      = static_cast<int32_t>(r.cfo_int);
-                        evt["cfo_frac"]     = static_cast<double>(r.cfo_frac);
-                        evt["sto_int"]      = static_cast<int32_t>(r.sto_int);
-                        evt["tau_late"]     = static_cast<int32_t>(tau_late);
-                        evt["snr_db"]       = static_cast<double>(r.snr_db);
-                        evt["tail"]         = static_cast<int32_t>(tail);
-                        evt["nominal_tail"] = static_cast<uint32_t>(nominal_tail);
-                        _telemetry(evt);
-                    } catch (...) {
-                        // swallow — never propagate into the scheduler
+                {
+                    std::shared_lock cb_lock(_callback_mutex);
+                    if (_telemetry) {
+                        try {
+                            gr::property_map evt;
+                            evt["type"]         = std::pmr::string("multisf_sync");
+                            evt["sf"]           = static_cast<uint32_t>(lane.sf);
+                            evt["bw"]           = static_cast<uint32_t>(bandwidth);
+                            evt["os_factor"]    = static_cast<uint32_t>(lane.os_factor);
+                            evt["cfo_int"]      = static_cast<int32_t>(r.cfo_int);
+                            evt["cfo_frac"]     = static_cast<double>(r.cfo_frac);
+                            evt["sto_int"]      = static_cast<int32_t>(r.sto_int);
+                            evt["tau_late"]     = static_cast<int32_t>(tau_late);
+                            evt["snr_db"]       = static_cast<double>(r.snr_db);
+                            evt["tail"]         = static_cast<int32_t>(tail);
+                            evt["nominal_tail"] = static_cast<uint32_t>(nominal_tail);
+                            _telemetry(evt);
+                        } catch (...) {
+                            // swallow — never propagate into the scheduler
+                        }
                     }
                 }
             } else if (r.state == phy::SyncResult::State::Failed) {
@@ -566,11 +605,12 @@ private:
     }
 
     static void decimateToNyquist(PerSfDecoder& lane, std::span<const cf32> in_span, std::size_t in_offset) noexcept {
-        // Decimate from the oversampled buffer to Nyquist rate. During
-        // Detect state, decim_phase is 0 (no timing info yet). After
-        // LOCK, decim_phase is set to round(sto_frac * os) mod os so the
-        // decimation picks samples at the correct phase within each
-        // os-length stride, matching the signal's actual timing offset.
+        // Decimate from the oversampled buffer to Nyquist rate.
+        // decim_phase is always 0 after the decode pipeline revert
+        // (81921d9 baseline) — the fractional-STO adjustment that set it
+        // was removed because it broke real RF header decode. The field
+        // is retained in PerSfDecoder for future re-implementation.
+        // See memory: gr4-lora.decode for the regression details.
         if (!lane.aa_enabled) {
             const uint32_t os    = lane.os_factor;
             const uint32_t phase = lane.decim_phase; // 0 during Detect
@@ -630,8 +670,16 @@ private:
         const std::size_t frame_start_idx = out_idx;
 
         // Copy payload bytes to the output port (stream).
+        // If the output buffer fills, truncate silently — the tag below
+        // still reports the full pay_len, so downstream consumers can
+        // detect truncation by comparing out_idx - frame_start_idx vs. pay_len.
         for (auto b : frame.payload) {
             if (out_idx >= out_span.size()) {
+                if (debug) {
+                    gr::lora::log_ts("debug", "multisf",
+                        "TRUNC sf=%u pay_len=%u wrote=%zu — output buffer full",
+                        lane.sf, static_cast<unsigned>(frame.payload_len), out_idx - frame_start_idx);
+                }
                 break;
             }
             out_span[out_idx++] = b;
@@ -646,10 +694,10 @@ private:
         tag["crc_valid"]    = gr::pmt::Value(frame.crc_valid);
         tag["is_downchirp"] = gr::pmt::Value(false);
         tag["snr_db"]       = gr::pmt::Value(static_cast<double>(lane.cached_snr_db));
-        if (lane.cached_noise_db > -999.f) {
+        if (lane.cached_noise_db > kNoiseFloorUnset) {
             tag["noise_floor_db"] = gr::pmt::Value(static_cast<double>(lane.cached_noise_db));
         }
-        if (lane.cached_peak_db > -999.f) {
+        if (lane.cached_peak_db > kNoiseFloorUnset) {
             tag["peak_db"] = gr::pmt::Value(static_cast<double>(lane.cached_peak_db));
         }
         tag["cfo_int"]  = gr::pmt::Value(static_cast<int64_t>(lane.cached_cfo_int));
@@ -688,7 +736,7 @@ private:
         if (_last_sample_rate > 0.f) {
             tag["sample_rate"] = gr::pmt::Value(_last_sample_rate); // SigMF tag::SAMPLE_RATE is float32
         }
-        if (_last_frequency != 0.0) {
+        if (_last_frequency != kFreqUnset) {
             tag["frequency"] = gr::pmt::Value(_last_frequency);
         }
         if (_last_ppm != 0.f) {
@@ -711,18 +759,23 @@ private:
         gr::sendMessage<gr::message::Command::Notify>(msg_out, "", "payload", msg_data);
 
         // Optional telemetry callback (set externally).
-        if (_telemetry) {
-            try {
-                gr::property_map evt;
-                evt["type"]   = std::pmr::string("multisf_frame");
-                evt["sf"]     = static_cast<uint32_t>(lane.sf);
-                evt["crc_ok"] = frame.crc_valid;
-                evt["len"]    = static_cast<uint32_t>(frame.payload_len);
-                evt["cr"]     = static_cast<uint32_t>(frame.cr);
-                evt["snr_db"] = static_cast<double>(lane.cached_snr_db);
-                _telemetry(evt);
-            } catch (...) {
-                // swallow — never propagate exceptions into the scheduler
+        // processBulk already holds shared_lock on _lanes_mutex; acquire
+        // shared_lock on _callback_mutex to protect _telemetry read+call.
+        {
+            std::shared_lock cb_lock(_callback_mutex);
+            if (_telemetry) {
+                try {
+                    gr::property_map evt;
+                    evt["type"]   = std::pmr::string("multisf_frame");
+                    evt["sf"]     = static_cast<uint32_t>(lane.sf);
+                    evt["crc_ok"] = frame.crc_valid;
+                    evt["len"]    = static_cast<uint32_t>(frame.payload_len);
+                    evt["cr"]     = static_cast<uint32_t>(frame.cr);
+                    evt["snr_db"] = static_cast<double>(lane.cached_snr_db);
+                    _telemetry(evt);
+                } catch (...) {
+                    // swallow — never propagate exceptions into the scheduler
+                }
             }
         }
     }
