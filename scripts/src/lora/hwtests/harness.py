@@ -38,7 +38,6 @@ from typing import Any
 
 import cbor2
 
-from lora.bridges.meshcore.driver import CompanionDriver
 from lora.hwtests.matrix import ConfigPoint
 from lora.hwtests.report import err, info
 
@@ -391,47 +390,7 @@ def spawn_meshcore_bridge(
 # ---- Companion convenience -------------------------------------------------
 
 
-def companion_apply_and_advert(
-    point: ConfigPoint,
-    companion: CompanionDriver,
-    *,
-    tx_repeats: int = 3,
-    gap_s: float = 2.0,
-    settle_s: float = SETTLE_S,
-    pre_send: Callable[[], object] | None = None,
-) -> tuple[bool, int]:
-    """Configure a MeshCore companion and burst N ADVERTs.
 
-    Steps:
-      1. ``set_radio(freq, bw, sf, cr)`` — return ``(False, 0)`` on failure.
-      2. ``set_tx_power(point.tx_power)`` — log on failure but continue.
-      3. Sleep ``settle_s`` so the PLL locks and the Heltec reboot
-         (if direct-serial mode) settles before TX.
-      4. Run ``pre_send`` once (e.g. ``EventCollector.drain``) so stale
-         receiver events from the retune don't pollute downstream
-         collection.
-      5. Send ``tx_repeats`` ADVERTs spaced ``gap_s`` seconds apart.
-
-    Returns ``(set_radio_ok, advert_ok_count)``. Shared by ``decode``
-    (RX-side validation) and ``transmit`` (TX-only, no SDR) hwtest
-    modes. Companion-agnostic — any device that speaks ``meshcore-cli``
-    works (Heltec V3, RAK4631, etc.).
-    """
-    bw_khz = point.bw / 1000.0
-    if not companion.set_radio(point.freq_mhz, bw_khz, point.sf, cr=point.cr):
-        return False, 0
-    if not companion.set_tx_power(point.tx_power):
-        err(f"set_tx_power({point.tx_power}) failed")
-    time.sleep(settle_s)
-    if pre_send is not None:
-        pre_send()
-    ok = 0
-    for i in range(tx_repeats):
-        if companion.send_advert():
-            ok += 1
-        if i < tx_repeats - 1:
-            time.sleep(gap_s)
-    return True, ok
 
 
 async def companion_apply_and_advert_async(
@@ -831,7 +790,6 @@ __all__ = [
     "TRX_PORT",
     "assert_alive",
     "assert_all_alive",
-    "companion_apply_and_advert",
     "companion_apply_and_advert_async",
     "spawn_lora_core",
     "spawn_meshcore_bridge",

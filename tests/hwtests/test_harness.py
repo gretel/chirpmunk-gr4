@@ -21,7 +21,6 @@ from lora.hwtests.harness import (
     EventCollector,
     assert_alive,
     assert_all_alive,
-    companion_apply_and_advert,
     start_process,
     stop_process,
     wait_tcp,
@@ -307,99 +306,4 @@ class _FakeCompanion:
         return ok
 
 
-class TestCompanionApplyAndAdvert:
-    """Unit-tests for the shared decode/transmit helper.
 
-    Times out the sleeps to keep the suite fast.
-    """
-
-    def test_set_radio_failure_returns_early(self) -> None:
-        comp = _FakeCompanion(set_radio_ok=False)
-        point = ConfigPoint(sf=8, bw=62500, freq_mhz=869.618)
-        ok, count = companion_apply_and_advert(
-            point,
-            comp,  # type: ignore[arg-type]
-            settle_s=0.0,
-            gap_s=0.0,
-        )
-        assert ok is False
-        assert count == 0
-        # Only set_radio was attempted; tx_power / sends never reached.
-        assert [c[0] for c in comp.calls] == ["set_radio"]
-
-    def test_full_burst_counts_acks(self) -> None:
-        comp = _FakeCompanion(advert_results=[True, False, True])
-        point = ConfigPoint(sf=9, bw=125000, freq_mhz=869.618, tx_power=10)
-        ok, count = companion_apply_and_advert(
-            point,
-            comp,  # type: ignore[arg-type]
-            tx_repeats=3,
-            settle_s=0.0,
-            gap_s=0.0,
-        )
-        assert ok is True
-        assert count == 2
-        names = [c[0] for c in comp.calls]
-        assert names == [
-            "set_radio",
-            "set_tx_power",
-            "send_advert",
-            "send_advert",
-            "send_advert",
-        ]
-
-    def test_pre_send_hook_runs_after_settle(self) -> None:
-        comp = _FakeCompanion()
-        point = ConfigPoint(sf=7, bw=62500, freq_mhz=869.618)
-        events: list[str] = []
-
-        def hook() -> None:
-            events.append("drained")
-
-        ok, count = companion_apply_and_advert(
-            point,
-            comp,  # type: ignore[arg-type]
-            tx_repeats=1,
-            settle_s=0.0,
-            gap_s=0.0,
-            pre_send=hook,
-        )
-        assert ok is True
-        assert count == 1
-        assert events == ["drained"]
-        # Hook fired between set_tx_power and the first send_advert.
-        names = [c[0] for c in comp.calls]
-        assert names == ["set_radio", "set_tx_power", "send_advert"]
-
-    def test_set_tx_power_failure_does_not_abort(self) -> None:
-        comp = _FakeCompanion(set_tx_power_ok=False)
-        point = ConfigPoint(sf=8, bw=62500, freq_mhz=869.618)
-        ok, count = companion_apply_and_advert(
-            point,
-            comp,  # type: ignore[arg-type]
-            tx_repeats=2,
-            settle_s=0.0,
-            gap_s=0.0,
-        )
-        # set_tx_power returns False but the helper continues to TX.
-        assert ok is True
-        assert count == 2
-
-    def test_passes_freq_bw_sf_cr_to_companion(self) -> None:
-        comp = _FakeCompanion()
-        point = ConfigPoint(sf=11, bw=250000, freq_mhz=869.618, tx_power=14, cr=5)
-        companion_apply_and_advert(
-            point,
-            comp,  # type: ignore[arg-type]
-            tx_repeats=1,
-            settle_s=0.0,
-            gap_s=0.0,
-        )
-        # First call should be set_radio with the matrix-point values
-        # converted (bw Hz -> kHz). cr threads through as a kwarg.
-        name, args, kwargs = comp.calls[0]
-        assert name == "set_radio"
-        assert args == (869.618, 250.0, 11)
-        assert kwargs == {"cr": 5}
-        # Second call: set_tx_power(14).
-        assert comp.calls[1] == ("set_tx_power", (14,), {})
