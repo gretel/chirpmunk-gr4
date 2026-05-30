@@ -25,7 +25,6 @@ from typing import Any
 
 import cbor2
 
-from lora.bridges.meshcore.driver import CompanionDriver
 from lora.hwtests.harness import (
     AGG_PORT,
     FLUSH_BRIDGE_S,
@@ -111,7 +110,7 @@ def collect_bridge(results: list[dict[str, Any]]) -> dict[str, Any]:
 async def _run_bridge_point(  # pragma: no cover  # hw-only path
     point: ConfigPoint,
     companion: MeshCoreCompanion,
-    driver: CompanionDriver,
+    bridge: MeshCoreCompanion,
     config_sock: socket.socket,
     sdr_pubkey: str,
     heltec_name: str,
@@ -149,7 +148,7 @@ async def _run_bridge_point(  # pragma: no cover  # hw-only path
     config_sock.setblocking(True)
 
     bw_khz = point.bw / 1000.0
-    driver.set_radio(point.freq_mhz, bw_khz, point.sf, cr=point.cr)
+    await bridge.set_radio(point.freq_mhz, bw_khz, point.sf, cr=point.cr)
     if not await companion.set_radio(point.freq_mhz, bw_khz, point.sf, cr=point.cr):
         err(f"  set_radio failed for {point_label(point)}")
         return result
@@ -162,7 +161,7 @@ async def _run_bridge_point(  # pragma: no cover  # hw-only path
         tx_air_a = lora_airtime_s(point.sf, point.bw)
         await asyncio.sleep(max(FLUSH_BRIDGE_S, tx_air_a + 2.0))
         assert_all_alive()
-        contacts_out = driver.get_contacts()
+        contacts_out = await bridge.get_contacts()
         heltec_pk = companion.pubkey.lower()
         advert_rx = heltec_pk[:12] in contacts_out.lower() if heltec_pk else False
         result["advert_rx"] = advert_rx
@@ -181,7 +180,7 @@ async def _run_bridge_point(  # pragma: no cover  # hw-only path
     # Phase B: Bridge ADVERT → Heltec RX
     info("  Phase B: Bridge ADVERT → Heltec RX")
     companion.drain_adverts()
-    driver.send_advert()
+    await bridge.send_advert()
     tx_air = lora_airtime_s(point.sf, point.bw)
     await asyncio.sleep(max(FLUSH_TX_S, tx_air + 1.0))
     # Phase B's TX path is the documented B210 1.5 s libusb risk; check
@@ -217,7 +216,7 @@ async def _run_bridge_point(  # pragma: no cover  # hw-only path
     companion.drain_messages()
     payload_c = bridge_payload(point)
     result["msg_tx_payload"] = payload_c
-    msg_ok, msg_output = driver.send_msg(heltec_name, payload_c)
+    msg_ok, msg_output = await bridge.send_msg_by_name(heltec_name, payload_c)
     msg_acked = "acked" in msg_output.lower() if msg_ok else None
     result["msg_tx_acked"] = msg_acked
     tx_air_c = lora_airtime_s(point.sf, point.bw, n_bytes=40)
@@ -252,7 +251,7 @@ async def _run_bridge_point(  # pragma: no cover  # hw-only path
         # sleep, fail fast rather than burn the whole flush window.
         assert_all_alive()
         for _ in range(10):
-            recv_out = driver.recv_msg(timeout=1.0)
+            recv_out = await bridge.recv_msg(timeout=1.0)
             if not recv_out:
                 break
             all_recv.append(recv_out)
@@ -274,7 +273,7 @@ async def _run_bridge_point(  # pragma: no cover  # hw-only path
     info("  Phase F: Bridge GRP_TXT → Heltec RX (public channel)")
     companion.drain_messages()
     payload_f = bridge_payload(point)
-    chan_ok = driver.chan_msg("public", payload_f)
+    chan_ok = await bridge.send_chan_msg("public", payload_f)
     result["chan_tx"] = False
     result["chan_tx_payload"] = payload_f
     if chan_ok:
@@ -354,8 +353,16 @@ async def _run_async(  # pragma: no cover  # hw-only path
     heltec_pubkey = companion.pubkey
     info(f"Heltec pubkey: {heltec_pubkey[:16]}...")
 
-    driver = CompanionDriver(bridge_host="127.0.0.1", bridge_port=MESHCORE_BRIDGE_PORT)
-    card_out = driver.get_card()
+    bridge = MeshCoreCompanion()
+    connected = await bridge.connect(tcp_host="127.0.0.1", tcp_port=MESHCORE_BRIDGE_PORT)
+    if not connected:
+        err("meshcore_bridge not responding")
+        await companion.close()
+        stop_process(bridge_proc)
+        stop_process(agg_proc)
+        stop_process(binary_proc)
+        return 1
+    card_out = await bridge.get_card()
     sdr_pubkey = extract_pubkey_from_card(card_out)
     if not sdr_pubkey:
         err(f"cannot extract SDR pubkey from card output: {card_out[:80]}")
@@ -397,7 +404,7 @@ async def _run_async(  # pragma: no cover  # hw-only path
             r = await _run_bridge_point(
                 point,
                 companion,
-                driver,
+                bridge,
                 config_sock,
                 sdr_pubkey,
                 heltec_name,
