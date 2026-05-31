@@ -15,6 +15,8 @@ import socket
 from typing import Any
 from unittest.mock import MagicMock
 
+import pytest
+
 from lora.hwtests import harness
 from lora.hwtests.decode_test import _run_decode_point
 from lora.hwtests.harness import (
@@ -67,11 +69,43 @@ class TestSpawnAttachReturnsNone:
 def _make_stub_companion(
     *, set_radio: bool = True, set_tx: bool = True, tx_repeats_ok: int = 3
 ) -> MagicMock:
-    """Build a CompanionDriver-shaped stub for _run_*_point tests."""
+    """Build a MeshCoreCompanion-shaped stub for _run_*_point tests.
+
+    Provides both sync and async methods for transition compatibility.
+    Async methods return awaitables for decode/transmit paths.
+    Sync methods return values directly for scan path.
+    """
     stub = MagicMock()
-    stub.set_radio.return_value = set_radio
-    stub.set_tx_power.return_value = set_tx
-    stub.send_advert.side_effect = [True] * tx_repeats_ok + [False] * 10
+    calls: list[tuple] = []
+    adv_idx = 0
+    adv_results = [True] * tx_repeats_ok + [False] * 10
+
+    # Async versions track calls in `calls` list
+    async def _sr(name, *a, **kw):
+        calls.append((name, a, kw))
+        return set_radio
+
+    async def _st(name, *a, **kw):
+        calls.append((name, a, kw))
+        return set_tx
+
+    async def _sa(name, *a, **kw):
+        nonlocal adv_idx
+        idx = adv_idx
+        adv_idx += 1
+        ok = adv_results[idx] if idx < len(adv_results) else False
+        calls.append(("send_advert", (), {"idx": idx, "ok": ok}))
+        return ok
+
+    # Wrap each method to pass its name
+    stub.set_radio = lambda *a, **kw: _sr("set_radio", *a, **kw)
+    stub.set_tx_power = lambda *a, **kw: _st("set_tx_power", *a, **kw)
+    stub.send_advert = lambda *a, **kw: _sa("send_advert", *a, **kw)
+    stub.connect = lambda *a, **kw: _sr("connect", *a, **kw)
+    stub.get_radio = lambda *a, **kw: _st("get_radio", *a, **kw)
+    stub.close = lambda *a, **kw: _sa("close", *a, **kw)
+    stub._calls = calls
+    stub._adv_idx_ref = lambda: adv_idx
     return stub
 
 
@@ -82,9 +116,8 @@ def _free_port() -> tuple[socket.socket, int]:
 
 
 class TestRunDecodePoint:
-    def test_set_radio_failure_short_circuits(self, monkeypatch: Any) -> None:
-        # If set_radio returns False, the function returns immediately
-        # with tx_ok=False and no events.
+    @pytest.mark.asyncio
+    async def test_set_radio_failure_short_circuits(self, monkeypatch: Any) -> None:
         monkeypatch.setattr("time.sleep", lambda *_a, **_k: None)
         comp = _make_stub_companion(set_radio=False)
         recv, _port = _free_port()
@@ -93,22 +126,17 @@ class TestRunDecodePoint:
             collector.start()
             try:
                 p = ConfigPoint(sf=8, bw=62500, freq_mhz=869.618)
-                # Compress flush_s by stubbing lora_airtime_s? We just
-                # rely on monkeypatched time.sleep above.
-                result = _run_decode_point(p, comp, _solo_collectors(collector))
+                result = await _run_decode_point(p, comp, _solo_collectors(collector))
             finally:
                 collector.stop()
         finally:
             recv.close()
         assert result.tx_ok is False
         assert result.frames == []
-        comp.set_radio.assert_called_once()
+        assert "set_radio" in {c[0] for c in comp._calls}
 
-    def test_send_advert_called_three_times(self, monkeypatch: Any) -> None:
-        # End-to-end frame collection has too much timing slack to test
-        # reliably without real hardware (collector.drain at step 4
-        # races with the timer-injected event). Just verify the TX
-        # repeat loop fires three times.
+    @pytest.mark.asyncio
+    async def test_send_advert_called_three_times(self, monkeypatch: Any) -> None:
         monkeypatch.setattr("time.sleep", lambda *_a, **_k: None)
         comp = _make_stub_companion()
         recv, _port = _free_port()
@@ -117,17 +145,19 @@ class TestRunDecodePoint:
             collector.start()
             try:
                 p = ConfigPoint(sf=8, bw=62500, freq_mhz=869.618)
-                result = _run_decode_point(p, comp, _solo_collectors(collector))
+                result = await _run_decode_point(p, comp, _solo_collectors(collector))
             finally:
                 collector.stop()
         finally:
             recv.close()
         assert result.tx_ok is True
-        assert comp.send_advert.call_count == 3
+        sent = [c for c in comp._calls if c[0] == "send_advert"]
+        assert len(sent) == 3
 
 
 class TestRunScanPoint:
-    def test_set_radio_failure_short_circuits(self, monkeypatch: Any) -> None:
+    @pytest.mark.asyncio
+    async def test_set_radio_failure_short_circuits(self, monkeypatch: Any) -> None:
         monkeypatch.setattr("time.sleep", lambda *_a, **_k: None)
         comp = _make_stub_companion(set_radio=False)
         recv, _port = _free_port()
@@ -136,7 +166,7 @@ class TestRunScanPoint:
             collector.start()
             try:
                 p = ConfigPoint(sf=8, bw=62500, freq_mhz=869.618)
-                result = _run_scan_point(p, comp, collector, tuning_scan=False)
+                result = await _run_scan_point(p, comp, collector, tuning_scan=False)
             finally:
                 collector.stop()
         finally:

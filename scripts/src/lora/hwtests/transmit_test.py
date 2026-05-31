@@ -11,24 +11,21 @@ point. No ``lora_trx``/``lora_scan`` involvement — useful for:
 * Smoke-testing the companion link itself (does the device respond,
   retune, and key-up on demand?).
 
-Carved as a sibling of :mod:`lora.hwtests.decode_test` — the per-point
-``set_radio + set_tx_power + ADVERT burst`` is shared via
-:func:`lora.hwtests.harness.companion_apply_and_advert`.
+Uses :class:`lora.hwtests.harness.MeshCoreCompanion` for a persistent
+TCP/serial connection (one connect, many commands — no per-command
+``uvx meshcore-cli`` subprocess, unlike the old ``CompanionDriver``).
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
 from dataclasses import asdict
 from datetime import datetime, timezone
 
-from lora.bridges.meshcore.driver import CompanionDriver
-from lora.core.udp import parse_host_port
 from lora.hwtests.harness import (
-    BRIDGE_PORT,
-    companion_apply_and_advert,
-    spawn_serial_bridge,
-    stop_process,
+    MeshCoreCompanion,
+    companion_apply_and_advert_async,
 )
 from lora.hwtests.matrix import (
     MATRICES,
@@ -47,13 +44,13 @@ from lora.hwtests.report import (
 TX_REPEATS = 3
 
 
-def _run_transmit_point(
+async def _run_transmit_point(
     point: ConfigPoint,
-    companion: CompanionDriver,
+    companion: MeshCoreCompanion,
 ) -> PointResult:
     """Configure companion, burst ADVERTs, no receiver-side validation."""
     result = PointResult(config=asdict(point))
-    set_ok, ok_count = companion_apply_and_advert(
+    set_ok, ok_count = await companion_apply_and_advert_async(
         point, companion, tx_repeats=TX_REPEATS
     )
     if not set_ok:
@@ -66,7 +63,7 @@ def _run_transmit_point(
     return result
 
 
-def run(
+async def _run_async(
     *,
     serial_port: str | None,
     tcp_host: str | None,
@@ -75,36 +72,32 @@ def run(
     label: str = "",
     hypothesis: str = "",
     output_dir: str = "data/testing",
-    attach: bool = False,
 ) -> int:
-    """Execute the companion-only transmit test. Returns process exit code."""
+    """Async core of the transmit test. Call via ``asyncio.run()``."""
     matrix = list(MATRICES[matrix_name])
     label = label or f"transmit_{matrix_name}"
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     output_path = os.path.join(output_dir, f"lora_test_{label}_{ts}.json")
 
-    # ---- companion (serial_bridge for USB, direct TCP for WiFi) ----
-    bridge_proc = None
+    # ---- companion (direct TCP or serial via meshcore_py) ----
+    companion = MeshCoreCompanion()
     if tcp_host is not None and tcp_port is not None:
         info(f"Connecting to companion via TCP {tcp_host}:{tcp_port}")
-        companion = CompanionDriver(bridge_host=tcp_host, bridge_port=tcp_port)
+        connected = await companion.connect(tcp_host=tcp_host, tcp_port=tcp_port)
+    elif serial_port is not None:
+        info(f"Connecting to companion on {serial_port}")
+        connected = await companion.connect(serial_port)
     else:
-        if serial_port is None:
-            err("transmit: --serial or --tcp required")
-            return 2
-        bridge_proc = spawn_serial_bridge(  # pragma: no cover  # hw-only
-            serial_port, attach=attach
-        )
-        companion = CompanionDriver(  # pragma: no cover  # hw-only
-            bridge_host="127.0.0.1", bridge_port=BRIDGE_PORT
-        )
+        err("transmit: --serial or --tcp required")
+        return 2
 
-    radio_info = companion.get_radio()  # pragma: no cover  # hw-only
-    if not radio_info:  # pragma: no cover  # hw-only
+    if not connected:
         err("companion not responding")
-        stop_process(bridge_proc)
+        await companion.close()
         return 1
-    info(f"companion: {radio_info}")  # pragma: no cover  # hw-only
+
+    radio = await companion.get_radio()
+    info(f"companion: {radio}")
 
     info(f"\n--- transmit: {len(matrix)} points, matrix={matrix_name} ---")
     if hypothesis:
@@ -113,14 +106,14 @@ def run(
 
     results: list[PointResult] = []
     try:
-        for i, point in enumerate(matrix):  # pragma: no cover  # hw-only
+        for i, point in enumerate(matrix):
             info(f"[{i + 1}/{len(matrix)}] {point_label(point)}")
-            results.append(_run_transmit_point(point, companion))
-    except KeyboardInterrupt:  # pragma: no cover  # hw-only
+            results.append(await _run_transmit_point(point, companion))
+    except KeyboardInterrupt:
         info("\nInterrupted")
-    finally:  # pragma: no cover  # hw-only
-        companion.set_radio(869.618, 62.5, 8, cr=8)
-        stop_process(bridge_proc)
+    finally:
+        await companion.set_radio(869.618, 62.5, 8, cr=8)
+        await companion.close()
 
     write_results(
         output_path=output_path,
@@ -139,7 +132,39 @@ def parse_tcp(value: str | None) -> tuple[str | None, int | None]:
     """Parse ``HOST:PORT`` or return ``(None, None)`` for None / empty."""
     if not value:
         return None, None
+    from lora.core.udp import parse_host_port
+
     return parse_host_port(value)
 
 
-__all__ = ["TX_REPEATS", "_run_transmit_point", "parse_tcp", "run"]
+def run(
+    *,
+    serial_port: str | None,
+    tcp_host: str | None,
+    tcp_port: int | None,
+    matrix_name: str,
+    label: str = "",
+    hypothesis: str = "",
+    output_dir: str = "data/testing",
+    attach: bool = False,
+) -> int:
+    """Execute the companion-only transmit test. Returns process exit code.
+
+    ``attach`` is accepted for API compatibility with other hwtest modes
+    but ignored — ``MeshCoreCompanion`` always opens its own persistent
+    connection.
+    """
+    return asyncio.run(
+        _run_async(
+            serial_port=serial_port,
+            tcp_host=tcp_host,
+            tcp_port=tcp_port,
+            matrix_name=matrix_name,
+            label=label,
+            hypothesis=hypothesis,
+            output_dir=output_dir,
+        )
+    )
+
+
+__all__ = ["TX_REPEATS", "_run_transmit_point", "run"]

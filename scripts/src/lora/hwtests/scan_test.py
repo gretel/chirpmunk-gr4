@@ -10,6 +10,7 @@ existing JSON outputs.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import time
 import tomllib
@@ -17,19 +18,17 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any
 
-from lora.bridges.meshcore.driver import CompanionDriver
 from lora.core.udp import create_udp_subscriber
 from lora.hwtests.harness import (
-    BRIDGE_PORT,
     FLUSH_SCAN_S,
     FLUSH_SCAN_TUNING_S,
     FREQ_TOL_HZ,
     SCAN_PORT,
     SETTLE_S,
     EventCollector,
+    MeshCoreCompanion,
     assert_all_alive,
     spawn_sdr_binary,
-    spawn_serial_bridge,
     stop_process,
 )
 from lora.hwtests.matrix import (
@@ -140,9 +139,9 @@ def _is_tuning_scan_config(config_file: str) -> bool:
         return False
 
 
-def _run_scan_point(
+async def _run_scan_point(
     point: ConfigPoint,
-    companion: CompanionDriver,
+    companion: MeshCoreCompanion,
     collector: EventCollector,
     *,
     tuning_scan: bool,
@@ -151,33 +150,33 @@ def _run_scan_point(
     result = PointResult(config=asdict(point))
 
     bw_khz = point.bw / 1000.0
-    if not companion.set_radio(point.freq_mhz, bw_khz, point.sf, cr=point.cr):
+    if not await companion.set_radio(point.freq_mhz, bw_khz, point.sf, cr=point.cr):
         err(f"set_radio failed for {point_label(point)}")
         return result
-    if not companion.set_tx_power(point.tx_power):
+    if not await companion.set_tx_power(point.tx_power):
         err(f"set_tx_power({point.tx_power}) failed")
 
-    time.sleep(SETTLE_S)
+    await asyncio.sleep(SETTLE_S)
     collector.drain()
 
     ok_count = 0
     tx_repeats = 3
     for i in range(tx_repeats):
-        if companion.send_advert():
+        if await companion.send_advert():
             ok_count += 1
         if i < tx_repeats - 1:
-            time.sleep(2.0)
+            await asyncio.sleep(2.0)
     result.tx_ok = ok_count > 0
     info(f"  TX {ok_count}/{tx_repeats} ok")
 
-    time.sleep(flush_s)
+    await asyncio.sleep(flush_s)
     events = collector.drain()
     tx_freq_hz = point.freq_mhz * 1e6
     _collect_scan(result, events, tx_freq_hz)
     return result
 
 
-def run(
+async def _run_async(
     *,
     serial_port: str | None,
     tcp_host: str | None,
@@ -197,27 +196,23 @@ def run(
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     output_path = os.path.join(output_dir, f"lora_test_{label}_{ts}.json")
 
-    bridge_proc = None
+    companion = MeshCoreCompanion()
     if tcp_host is not None and tcp_port is not None:
         info(f"Connecting to companion via TCP {tcp_host}:{tcp_port}")
-        companion = CompanionDriver(bridge_host=tcp_host, bridge_port=tcp_port)
+        connected = await companion.connect(tcp_host=tcp_host, tcp_port=tcp_port)
     else:
         if serial_port is None:
             err("scan: --serial or --tcp required")
             return 2
         # ---- past this point everything talks to real hardware ----
-        bridge_proc = spawn_serial_bridge(
-            serial_port, attach=attach
-        )  # pragma: no cover
-        companion = CompanionDriver(  # pragma: no cover
-            bridge_host="127.0.0.1", bridge_port=BRIDGE_PORT
-        )
-    radio_info = companion.get_radio()  # pragma: no cover
-    if not radio_info:  # pragma: no cover
+        info(f"Connecting to companion on {serial_port}")
+        connected = await companion.connect(serial_port=serial_port)
+    if not connected:
         err("companion not responding")
-        stop_process(bridge_proc)
+        await companion.close()
         return 1
-    info(f"companion: {radio_info}")  # pragma: no cover
+    radio = await companion.get_radio()
+    info(f"companion: {radio}")
 
     # Tuning scanner needs longer startup (first sweep ~30-60 s).
     udp_timeout = 90.0
@@ -252,7 +247,7 @@ def run(
         for i, point in enumerate(matrix):
             info(f"[{i + 1}/{len(matrix)}] {point_label(point)}")
             assert_all_alive()
-            result = _run_scan_point(
+            result = await _run_scan_point(
                 point, companion, collector, tuning_scan=is_tuning_scan
             )
             results.append(result)
@@ -262,9 +257,9 @@ def run(
     finally:
         collector.stop()
         sock.close()
-        companion.set_radio(869.618, 62.5, 8, cr=8)
+        await companion.set_radio(869.618, 62.5, 8, cr=8)
         stop_process(binary_proc)
-        stop_process(bridge_proc)
+        await companion.close()
 
     write_results(
         output_path=output_path,
@@ -277,6 +272,41 @@ def run(
         results=results,
     )
     return 0
+
+
+def run(
+    *,
+    serial_port: str | None,
+    tcp_host: str | None,
+    tcp_port: int | None,
+    matrix_name: str,
+    config_file: str = "apps/config.toml",
+    binary: str = "",
+    label: str = "",
+    hypothesis: str = "",
+    output_dir: str = "data/testing",
+    attach: bool = False,
+    host: str = "127.0.0.1",
+) -> int:
+    """Execute the scan hardware test. Returns process exit code.
+
+    Wraps the async core in ``asyncio.run()``.
+    """
+    return asyncio.run(
+        _run_async(
+            serial_port=serial_port,
+            tcp_host=tcp_host,
+            tcp_port=tcp_port,
+            matrix_name=matrix_name,
+            config_file=config_file,
+            binary=binary,
+            label=label,
+            hypothesis=hypothesis,
+            output_dir=output_dir,
+            attach=attach,
+            host=host,
+        )
+    )
 
 
 __all__ = ["_collect_scan", "_is_tuning_scan_config", "_run_scan_point", "run"]

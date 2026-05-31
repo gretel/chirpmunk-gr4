@@ -38,7 +38,6 @@ from typing import Any
 
 import cbor2
 
-from lora.bridges.meshcore.driver import CompanionDriver
 from lora.hwtests.matrix import ConfigPoint
 from lora.hwtests.report import err, info
 
@@ -391,46 +390,33 @@ def spawn_meshcore_bridge(
 # ---- Companion convenience -------------------------------------------------
 
 
-def companion_apply_and_advert(
+async def companion_apply_and_advert_async(
     point: ConfigPoint,
-    companion: CompanionDriver,
+    companion: MeshCoreCompanion,
     *,
     tx_repeats: int = 3,
     gap_s: float = 2.0,
     settle_s: float = SETTLE_S,
     pre_send: Callable[[], object] | None = None,
 ) -> tuple[bool, int]:
-    """Configure a MeshCore companion and burst N ADVERTs.
+    """Async version of companion_apply_and_advert for MeshCoreCompanion.
 
-    Steps:
-      1. ``set_radio(freq, bw, sf, cr)`` — return ``(False, 0)`` on failure.
-      2. ``set_tx_power(point.tx_power)`` — log on failure but continue.
-      3. Sleep ``settle_s`` so the PLL locks and the Heltec reboot
-         (if direct-serial mode) settles before TX.
-      4. Run ``pre_send`` once (e.g. ``EventCollector.drain``) so stale
-         receiver events from the retune don't pollute downstream
-         collection.
-      5. Send ``tx_repeats`` ADVERTs spaced ``gap_s`` seconds apart.
-
-    Returns ``(set_radio_ok, advert_ok_count)``. Shared by ``decode``
-    (RX-side validation) and ``transmit`` (TX-only, no SDR) hwtest
-    modes. Companion-agnostic — any device that speaks ``meshcore-cli``
-    works (Heltec V3, RAK4631, etc.).
+    Same logic as the sync version but awaits async companion methods.
     """
     bw_khz = point.bw / 1000.0
-    if not companion.set_radio(point.freq_mhz, bw_khz, point.sf, cr=point.cr):
+    if not await companion.set_radio(point.freq_mhz, bw_khz, point.sf, cr=point.cr):
         return False, 0
-    if not companion.set_tx_power(point.tx_power):
+    if not await companion.set_tx_power(point.tx_power):
         err(f"set_tx_power({point.tx_power}) failed")
-    time.sleep(settle_s)
+    await asyncio.sleep(settle_s)
     if pre_send is not None:
         pre_send()
     ok = 0
     for i in range(tx_repeats):
-        if companion.send_advert():
+        if await companion.send_advert():
             ok += 1
         if i < tx_repeats - 1:
-            time.sleep(gap_s)
+            await asyncio.sleep(gap_s)
     return True, ok
 
 
@@ -650,6 +636,121 @@ class MeshCoreCompanion:  # pragma: no cover  # meshcore_py wrapper, hw-only
             info(f"  send_message failed: {e}")
             return False
 
+    async def set_tx_power(self, dbm: int) -> bool:
+        from meshcore.events import EventType  # type: ignore[import-not-found]
+
+        assert self._mc is not None
+        try:
+            result = await self._mc.commands.set_tx_power(dbm)
+            return result.type == EventType.OK
+        except Exception as e:
+            info(f"  set_tx_power failed: {e}")
+            return False
+
+    async def send_chan_msg(self, channel_name: str, text: str) -> bool:
+        from meshcore.events import EventType  # type: ignore[import-not-found]
+
+        assert self._mc is not None
+        try:
+            channels = self._mc.known_channels
+            idx = None
+            for ch in channels:
+                if ch.get("name", "").lower() == channel_name.lower():
+                    idx = ch["idx"]
+                    break
+            if idx is None:
+                info(f"  channel '{channel_name}' not found")
+                return False
+            result = await self._mc.commands.send_chan_msg(idx, text)
+            return result.type != EventType.ERROR
+        except Exception as e:
+            info(f"  send_chan_msg failed: {e}")
+            return False
+
+    async def get_radio(self) -> str:
+        from meshcore.events import EventType  # type: ignore[import-not-found]
+
+        assert self._mc is not None
+        try:
+            result = await self._mc.commands.send_appstart()
+            if result.type != EventType.SELF_INFO:
+                return ""
+            p = result.payload
+            freq_hz = int(p.get("freq", 0) * 1e6)
+            bw_hz = int(p.get("bw", 0) * 1e3)
+            sf = p.get("sf", 0)
+            cr = p.get("cr", 0)
+            tx_gain = p.get("tx_gain", 0)
+            return f"freq={freq_hz} bw={bw_hz} sf={sf} cr={cr} tx_gain={tx_gain}"
+        except Exception as e:
+            info(f"  get_radio failed: {e}")
+            return ""
+
+    async def get_contacts(self) -> str:
+        from meshcore.events import EventType  # type: ignore[import-not-found]
+
+        assert self._mc is not None
+        try:
+            result = await self._mc.commands.get_contacts(timeout=5)
+            if result.type == EventType.CONTACTS:
+                contacts = result.payload.get("contacts", [])
+                return "\n".join(c.get("public_key", "")[:12] for c in contacts)
+            return ""
+        except Exception as e:
+            info(f"  get_contacts failed: {e}")
+            return ""
+
+    async def get_card(self) -> str:
+        from meshcore.events import EventType  # type: ignore[import-not-found]
+
+        assert self._mc is not None
+        try:
+            result = await self._mc.commands.export_contact()
+            if result.type == EventType.CONTACT_URI:
+                return result.payload.get("uri", "")
+            return ""
+        except Exception as e:
+            info(f"  get_card failed: {e}")
+            return ""
+
+    async def recv_msg(self, timeout: float = 5.0) -> str:
+        from meshcore.events import EventType  # type: ignore[import-not-found]
+
+        assert self._mc is not None
+        try:
+            result = await self._mc.commands.get_msg(timeout=timeout)
+            if result.type in (EventType.CONTACT_MSG_RECV, EventType.CHANNEL_MSG_RECV):
+                return result.payload.get("text", "")
+            return ""
+        except Exception as e:
+            info(f"  recv_msg failed: {e}")
+            return ""
+
+    async def send_msg_by_name(self, contact_name: str, text: str) -> tuple[bool, str]:
+        from meshcore.events import EventType  # type: ignore[import-not-found]
+
+        assert self._mc is not None
+        try:
+            contacts_result = await self._mc.commands.get_contacts(timeout=5)
+            if contacts_result.type != EventType.CONTACTS:
+                return False, "no contacts"
+            contacts = contacts_result.payload.get("contacts", [])
+            target = None
+            for c in contacts:
+                name = c.get("adv_name", "")
+                if name.lower().startswith(contact_name.lower()):
+                    target = c
+                    break
+            if target is None:
+                return False, f"contact '{contact_name}' not found"
+            pubkey = bytes.fromhex(target["public_key"])
+            result = await self._mc.commands.send_msg(pubkey, text)
+            acked = result.type == EventType.MSG_SENT
+            return acked, "acked" if acked else "failed"
+        except Exception as e:
+            info(f"  send_msg_by_name failed: {e}")
+            return False, str(e)
+
     def drain_adverts(self) -> list[dict[str, Any]]:
         with self._lock:
             out = self._adverts
@@ -686,7 +787,7 @@ __all__ = [
     "TRX_PORT",
     "assert_alive",
     "assert_all_alive",
-    "companion_apply_and_advert",
+    "companion_apply_and_advert_async",
     "spawn_lora_core",
     "spawn_meshcore_bridge",
     "spawn_sdr_binary",

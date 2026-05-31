@@ -16,6 +16,7 @@ stay populated and ``per_dut`` / ``matchup`` are empty.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import socket
 import time
@@ -23,17 +24,15 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
-from lora.bridges.meshcore.driver import CompanionDriver
 from lora.core.udp import create_udp_subscriber, parse_host_port
 from lora.hwtests.harness import (
-    BRIDGE_PORT,
     FLUSH_DECODE_S,
     FREQ_TOL_HZ,
     EventCollector,
+    MeshCoreCompanion,
     assert_all_alive,
-    companion_apply_and_advert,
+    companion_apply_and_advert_async,
     spawn_sdr_binary,
-    spawn_serial_bridge,
     stop_process,
 )
 from lora.hwtests.matrix import (
@@ -292,12 +291,12 @@ def _compute_matchup(
     return out
 
 
-def _run_decode_point(
+async def _run_decode_point(
     point: ConfigPoint,
-    companion: CompanionDriver,
+    companion: MeshCoreCompanion,
     collectors: list[tuple[DutConfig, EventCollector]],
 ) -> PointResult:
-    """Configure companion, send ADVERTs, drain every DUT collector."""
+    """Configure companion via MeshCoreCompanion, send ADVERTs, drain every DUT collector."""
     flush_s = max(FLUSH_DECODE_S, lora_airtime_s(point.sf, point.bw) + 3.0)
     result = PointResult(config=asdict(point))
 
@@ -305,14 +304,16 @@ def _run_decode_point(
         for _, c in collectors:
             c.drain()
 
-    set_ok, ok_count = companion_apply_and_advert(point, companion, pre_send=drain_all)
+    set_ok, ok_count = await companion_apply_and_advert_async(
+        point, companion, pre_send=drain_all
+    )
     if not set_ok:
         err(f"set_radio failed for {point_label(point)}")
         return result
     result.tx_ok = ok_count > 0
     info(f"  TX {ok_count}/3 ok")
 
-    time.sleep(flush_s)
+    await asyncio.sleep(flush_s)
     tx_freq_hz = point.freq_mhz * 1e6
 
     per_dut: dict[str, DutPointResult] = {}
@@ -338,27 +339,32 @@ def _run_decode_point(
     return result
 
 
-def _connect_companion(
+async def _connect_companion(
     reference: ReferenceConfig,
     *,
     attach: bool,
-) -> tuple[CompanionDriver, Any]:
-    """Spawn ``serial_bridge`` (USB) or open a direct TCP companion.
+) -> tuple[MeshCoreCompanion, Any]:
+    """Open a persistent connection to the companion via meshcore_py.
 
-    Returns ``(driver, bridge_proc)``. ``bridge_proc`` is None when
-    using TCP or when ``attach=True``.
+    Returns ``(companion, None)``. ``attach`` is accepted for API
+    compatibility but ignored — the connection is always fresh.
+    ``bridge_proc`` is always None (no serial_bridge subprocess needed).
     """
+    companion = MeshCoreCompanion()
     if reference.tcp:
         host, port = parse_host_port(reference.tcp)
         info(f"Connecting to companion via TCP {host}:{port}")
-        return CompanionDriver(bridge_host=host, bridge_port=port), None
-    assert reference.serial is not None
-    bridge_proc = spawn_serial_bridge(reference.serial, attach=attach)
-    driver = CompanionDriver(bridge_host="127.0.0.1", bridge_port=BRIDGE_PORT)
-    return driver, bridge_proc
+        connected = await companion.connect(tcp_host=host, tcp_port=port)
+    else:
+        assert reference.serial is not None
+        info(f"Connecting to companion on {reference.serial}")
+        connected = await companion.connect(serial_port=reference.serial)
+    if not connected:
+        err("companion not responding")
+    return companion, None
 
 
-def run_test(
+async def run_test(
     test_config: TestConfig,
     *,
     output_dir: str = "data/testing",
@@ -393,11 +399,12 @@ def run_test(
     output_path = os.path.join(output_dir, f"lora_test_{label}_{ts}.json")
 
     # ---- companion (reference) -------------------------------------------
-    companion, bridge_proc = _connect_companion(test_config.reference, attach=attach)
-    radio_info = companion.get_radio()  # pragma: no cover
+    companion, bridge_proc = await _connect_companion(
+        test_config.reference, attach=attach
+    )
+    radio_info = await companion.get_radio()  # pragma: no cover
     if not radio_info:  # pragma: no cover
         err("companion not responding")
-        stop_process(bridge_proc)
         return 1
     info(f"companion: {radio_info}")  # pragma: no cover
 
@@ -440,7 +447,7 @@ def run_test(
         for i, point in enumerate(matrix):
             info(f"[{i + 1}/{len(matrix)}] {point_label(point)}")
             assert_all_alive()
-            result = _run_decode_point(point, companion, collectors)
+            result = await _run_decode_point(point, companion, collectors)
             results.append(result)
             if n_duts > 1 and result.per_dut:
                 for lbl, dpr in result.per_dut.items():
@@ -473,12 +480,11 @@ def run_test(
         for s in socks:
             s.close()
         try:
-            companion.set_radio(869.618, 62.5, 8, cr=8)
+            await companion.set_radio(869.618, 62.5, 8, cr=8)
         except Exception:
             pass
         for proc in dut_procs:
             stop_process(proc)
-        stop_process(bridge_proc)
 
     # First DUT's binary/config preserved as the legacy scalar fields.
     first = test_config.duts[0]
@@ -561,12 +567,14 @@ def run(
         # ``--matrix`` on the CLI overrides the TOML when provided.
         matrix_override = matrix_name if matrix_name else None
 
-    return run_test(
-        test_config,
-        output_dir=output_dir,
-        attach=attach,
-        matrix_override=matrix_override,
-        tx_power_override=tx_power,
+    return asyncio.run(
+        run_test(
+            test_config,
+            output_dir=output_dir,
+            attach=attach,
+            matrix_override=matrix_override,
+            tx_power_override=tx_power,
+        )
     )
 
 
