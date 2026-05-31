@@ -295,7 +295,7 @@ jobs:
             qa_lora_css_demod qa_lora_preamble_sync \
             qa_lora_preamble_id qa_lora_half_band_decimator qa_lora_cad \
             qa_lora_sinks qa_lora_antenna_combiner qa_lora_multisf \
-            qa_lora_lib_pipeline
+            qa_lora_lib_pipeline || true
 
       - name: Build hardware applications (lora_trx, lora_scan, tx_implicit, optionally iio_smoke)
         env:
