@@ -14,6 +14,7 @@ from __future__ import annotations
 import socket
 from typing import Any
 from unittest.mock import MagicMock
+
 import pytest
 
 from lora.hwtests import harness
@@ -74,18 +75,20 @@ def _make_stub_companion(
     Async methods return awaitables for decode/transmit paths.
     Sync methods return values directly for scan path.
     """
-    import asyncio
     stub = MagicMock()
     calls: list[tuple] = []
     adv_idx = 0
     adv_results = [True] * tx_repeats_ok + [False] * 10
+
     # Async versions track calls in `calls` list
     async def _sr(name, *a, **kw):
         calls.append((name, a, kw))
         return set_radio
+
     async def _st(name, *a, **kw):
         calls.append((name, a, kw))
         return set_tx
+
     async def _sa(name, *a, **kw):
         nonlocal adv_idx
         idx = adv_idx
@@ -93,6 +96,7 @@ def _make_stub_companion(
         ok = adv_results[idx] if idx < len(adv_results) else False
         calls.append(("send_advert", (), {"idx": idx, "ok": ok}))
         return ok
+
     # Wrap each method to pass its name
     stub.set_radio = lambda *a, **kw: _sr("set_radio", *a, **kw)
     stub.set_tx_power = lambda *a, **kw: _st("set_tx_power", *a, **kw)
@@ -149,6 +153,8 @@ class TestRunDecodePoint:
         assert result.tx_ok is True
         sent = [c for c in comp._calls if c[0] == "send_advert"]
         assert len(sent) == 3
+
+
 class TestRunScanPoint:
     @pytest.mark.asyncio
     async def test_set_radio_failure_short_circuits(self, monkeypatch: Any) -> None:

@@ -26,7 +26,6 @@ from lora.hwtests.harness import (
     wait_tcp,
     wait_udp,
 )
-from lora.hwtests.matrix import ConfigPoint
 
 
 def _free_port() -> int:
@@ -304,6 +303,3 @@ class _FakeCompanion:
             ok = False
         self.calls.append(("send_advert", (), {"idx": idx, "ok": ok}))
         return ok
-
-
-

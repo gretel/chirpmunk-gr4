@@ -16,6 +16,7 @@ stay populated and ``per_dut`` / ``matchup`` are empty.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import socket
 import time
@@ -23,7 +24,6 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
-import asyncio
 from lora.core.udp import create_udp_subscriber, parse_host_port
 from lora.hwtests.harness import (
     FLUSH_DECODE_S,
@@ -304,7 +304,9 @@ async def _run_decode_point(
         for _, c in collectors:
             c.drain()
 
-    set_ok, ok_count = await companion_apply_and_advert_async(point, companion, pre_send=drain_all)
+    set_ok, ok_count = await companion_apply_and_advert_async(
+        point, companion, pre_send=drain_all
+    )
     if not set_ok:
         err(f"set_radio failed for {point_label(point)}")
         return result
@@ -397,7 +399,9 @@ async def run_test(
     output_path = os.path.join(output_dir, f"lora_test_{label}_{ts}.json")
 
     # ---- companion (reference) -------------------------------------------
-    companion, bridge_proc = await _connect_companion(test_config.reference, attach=attach)
+    companion, bridge_proc = await _connect_companion(
+        test_config.reference, attach=attach
+    )
     radio_info = await companion.get_radio()  # pragma: no cover
     if not radio_info:  # pragma: no cover
         err("companion not responding")

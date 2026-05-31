@@ -10,6 +10,7 @@ existing JSON outputs.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import time
 import tomllib
@@ -17,10 +18,8 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any
 
-import asyncio
 from lora.core.udp import create_udp_subscriber
 from lora.hwtests.harness import (
-    BRIDGE_PORT,
     FLUSH_SCAN_S,
     FLUSH_SCAN_TUNING_S,
     FREQ_TOL_HZ,
@@ -248,7 +247,7 @@ async def _run_async(
         for i, point in enumerate(matrix):
             info(f"[{i + 1}/{len(matrix)}] {point_label(point)}")
             assert_all_alive()
-            result = _run_scan_point(
+            result = await _run_scan_point(
                 point, companion, collector, tuning_scan=is_tuning_scan
             )
             results.append(result)
@@ -260,7 +259,7 @@ async def _run_async(
         sock.close()
         await companion.set_radio(869.618, 62.5, 8, cr=8)
         stop_process(binary_proc)
-        stop_process(bridge_proc)
+        await companion.close()
 
     write_results(
         output_path=output_path,
@@ -273,7 +272,6 @@ async def _run_async(
         results=results,
     )
     return 0
-
 
 
 def run(

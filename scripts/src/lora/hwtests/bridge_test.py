@@ -354,7 +354,9 @@ async def _run_async(  # pragma: no cover  # hw-only path
     info(f"Heltec pubkey: {heltec_pubkey[:16]}...")
 
     bridge = MeshCoreCompanion()
-    connected = await bridge.connect(tcp_host="127.0.0.1", tcp_port=MESHCORE_BRIDGE_PORT)
+    connected = await bridge.connect(
+        tcp_host="127.0.0.1", tcp_port=MESHCORE_BRIDGE_PORT
+    )
     if not connected:
         err("meshcore_bridge not responding")
         await companion.close()

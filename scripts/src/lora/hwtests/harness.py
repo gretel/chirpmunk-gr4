@@ -390,9 +390,6 @@ def spawn_meshcore_bridge(
 # ---- Companion convenience -------------------------------------------------
 
 
-
-
-
 async def companion_apply_and_advert_async(
     point: ConfigPoint,
     companion: MeshCoreCompanion,
