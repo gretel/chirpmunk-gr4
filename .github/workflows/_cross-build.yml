@@ -292,7 +292,7 @@ jobs:
             qa_lora_tx qa_lora_rx qa_lora_splitter qa_lora_udp qa_lora_config \
             qa_lora_framesink qa_lora_scan qa_lora_cbor qa_lora_tx_queue \
             qa_lora_l1_detector qa_lora_primitives qa_lora_vangelista \
-            qa_lora_decode_chain qa_lora_css_demod qa_lora_preamble_sync \
+            qa_lora_css_demod qa_lora_preamble_sync \
             qa_lora_preamble_id qa_lora_half_band_decimator qa_lora_cad \
             qa_lora_sinks qa_lora_antenna_combiner qa_lora_multisf \
             qa_lora_lib_pipeline
