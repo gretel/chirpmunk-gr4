@@ -422,16 +422,38 @@ async def run_test(
         dut_procs.append(proc)
 
     # ---- subscribe + collect (one collector per DUT) --------------------
+    # Order: create sockets FIRST, warm-up on raw socket (unfiltered),
+    # THEN start EventCollector (which filters lora_frame). IIO-over-TCP
+    # (PlutoSDR) needs 3-5 s to start streaming; without warm-up the first
+    # matrix point's ADVERTs arrive before the pipeline is live → 0 frames.
     collectors: list[tuple[DutConfig, EventCollector]] = []
     socks: list[socket.socket] = []
+    warmup_sock: socket.socket | None = None
     for dut in test_config.duts:
         sock, _, _ = create_udp_subscriber(dut.host, dut.port)
+        socks.append(sock)
+        if warmup_sock is None:
+            warmup_sock = sock
+    # Wait for any UDP data from SDR before starting filtered collectors.
+    if not attach and warmup_sock is not None:
+        warmup_sock.settimeout(0.5)
+        deadline = time.monotonic() + 12.0
+        while time.monotonic() < deadline:
+            try:
+                warmup_sock.recvfrom(65536)
+                info(
+                    f"  warm-up complete after {time.monotonic() - (deadline - 12.0):.1f}s"
+                )
+                break
+            except TimeoutError:
+                continue
+        else:
+            info("  warm-up timeout (12s) — proceeding anyway")
+    # Now start filtered EventCollectors.
+    for dut, sock in zip(test_config.duts, socks):
         coll = EventCollector(sock, {"lora_frame"})
         coll.start()
         collectors.append((dut, coll))
-        socks.append(sock)
-    if not attach:
-        time.sleep(1.0)
 
     n_duts = len(test_config.duts)
     info(

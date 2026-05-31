@@ -12,20 +12,20 @@ level = "INFO"
 
 [radio_868]
 freq = 869618000
-rx_channel = [0]
-rx_gain = 60           # 0-71 dB manual PGA
+rx_channel = [0]       # A_BALANCED rf port (Pluto default)
+rx_gain = 71           # 0-71 dB manual PGA
 tx_gain = 89           # 0-89 dB
 lo_offset = 0          # ignored by AD9361 IIO driver
-dc_offset_auto = false # Pluto has no HW DC correction
+dc_offset_auto = false # Pluto has no HW DC correction; DSP DC blocker handles it
 
 # ── Transceiver (lora_trx) ──────────────────────────────────────────────────
 
 [trx]
 name = "Remote IIO PlutoSDR 868 MHz"
 radio = "radio_868"
-rate = 2500000                       # 2.5 MS/s — Pluto IIO AD9361 valid rate (40 MHz / 16 = 2.5M)
+rate = 2500000                       # 2.5 MS/s — Pluto IIO valid; 80 Mbps fits 100Base-T
 enable_tx = false                    # RX-only
-use_aa_filter = false                 # half-band FIR anti-alias on narrowband decimate
+use_aa_filter = false                # os=40 not power-of-2; AD9361 analog LPF @ 62.5k handles anti-alias
 
 [trx.transmit]
 sf = 8
@@ -54,7 +54,7 @@ tx_queue_depth = 0
 radio = "radio_868"
 freq_start = 867000000
 freq_stop = 870000000
-l1_rate = 4000000      # 4 MS/s — may need reduction over network
+l1_rate = 4000000      # 4 MS/s — Pluto IIO valid rate for wideband scan
 master_clock = 8000000 # 2x L1 rate for AD9361 decimation headroom
 channel_bw = 62500
 

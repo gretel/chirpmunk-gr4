@@ -221,7 +221,7 @@ inline std::atomic<gr::Size_t>* build_rx_graph(gr::Graph& graph, const TrxConfig
                 {"center_frequency", cfg.freq},
                 {"bandwidth", static_cast<double>(ad9361_bw)},
                 {"gain", cfg.gain_rx},
-                {"gain_mode", std::string("slow_attack")},
+                {"gain_mode", std::string("manual")},
                 {"rf_port", rfPort},
                 {"buffer_size", gr::Size_t{32768U}},
                 {"timeout_ms", gr::Size_t{1000U}},
@@ -236,6 +236,11 @@ inline std::atomic<gr::Size_t>* build_rx_graph(gr::Graph& graph, const TrxConfig
                 {"non_blocking", false},
                 {"max_overflow_count", gr::Size_t{10U}},
                 {"debug", false},   // IIOSource debug OFF — stdout spam triggers double-free on armv7
+                // DSP DC blocker: Pluto ignores LO offset, so DC spur sits at DC.
+                // IIR high-pass filter removes it; cutoff matches SoapySource config.
+                {"dc_blocker_enabled", true},
+                {"dc_blocker_cutoff", 2000.f},
+                {"overflow_recovery", true},
             });
             overflow_ptr = nullptr; // IIOSource has its own overflow counter (private); no SoapySource-style pointer exposure
             wireDecodeChains([&graph, &source](std::size_t /*r*/, auto& downstream) { return graph.connect<"out", "in">(source, downstream).has_value(); });
@@ -501,6 +506,9 @@ inline ScanGraph build_scan_graph(gr::Graph& graph, const ScanSetConfig& cfg, co
             {"buffer_size", gr::Size_t{32768U}},
             {"timeout_ms", gr::Size_t{1000U}},
             {"max_overflow_count", gr::Size_t{10U}},
+            {"dc_blocker_enabled", true},
+            {"dc_blocker_cutoff", 2000.f},
+            {"overflow_recovery", true},
         });
         if (!ok(graph.connect<"out", "in">(source, splitter))) {
             gr::lora::log_ts("error", "graph", "connect iio source -> splitter failed");
@@ -635,6 +643,9 @@ inline void build_streaming_scan_graph(gr::Graph& graph, const ScanSetConfig& cf
             {"buffer_size", gr::Size_t{32768U}},
             {"timeout_ms", gr::Size_t{1000U}},
             {"max_overflow_count", gr::Size_t{10U}},
+            {"dc_blocker_enabled", true},
+            {"dc_blocker_cutoff", 2000.f},
+            {"overflow_recovery", true},
         });
         if (!ok(graph.connect<"out", "in">(source, controller))) {
             gr::lora::log_ts("error", "graph", "connect iio source -> controller failed");
