@@ -185,7 +185,7 @@ const boost::ut::suite iioGraphBuilderSmoke = [] {
         checkFloat("sample_rate", cfg.rate);
         checkDouble("center_frequency", cfg.freq);
         checkDouble("gain", cfg.gain_rx);
-        checkStr("gain_mode", "slow_attack");
+        checkStr("gain_mode", "manual");
 
         // rf_port: when rx_channel[0] == 1 → "B_BALANCED", else "A_BALANCED"
         std::string expected_rf = (cfg.rx_channels[0] == 1U) ? "B_BALANCED" : "A_BALANCED";

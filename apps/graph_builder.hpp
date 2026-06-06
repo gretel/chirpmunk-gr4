@@ -28,6 +28,7 @@
 #include <gnuradio-4.0/sdr/SoapySource.hpp>
 #if GR4_LORA_HAS_IIO
 #include <gnuradio-4.0/iio/IIOSource.hpp>     // generic libiio source (Adalm-Pluto / FISH Ball)
+#include <gnuradio-4.0/iio/IIOHelper.hpp>     // Pluto/AD9361 convenience helpers
 #endif
 #include <gnuradio-4.0/testing/NullSources.hpp>
 
@@ -199,50 +200,19 @@ inline std::atomic<gr::Size_t>* build_rx_graph(gr::Graph& graph, const TrxConfig
 
 #if GR4_LORA_HAS_IIO
     if (cfg.device == "iio") {
-        std::string uri = cfg.device_param;
-        if (uri.starts_with("uri=")) {
-            uri = uri.substr(4);
-        }
         if (nRadio == 1) {
             // Allow chain-B-RF testing via cfg.rx_channels[0]==1: software-only
             // mux of RX2_BALANCED into chain-A's known-working baseband path.
-            // Useful to isolate "is RX2 antenna/RF cable healthy?" without
-            // touching the dual-RX 2R2T code path.
             const std::string rfPort = (cfg.rx_channels[0] == 1U) ? "B_BALANCED" : "A_BALANCED";
-            // AD9361 analog LPF bandwidth: set to widest receive BW, not sample rate.
-            // With stride decimation at os=40 and no anti-alias filter, setting the
-            // analog bandwidth to the sample rate (2.5 MHz) lets all out-of-channel
-            // energy alias into the decimated 62.5 kHz baseband, corrupting per-symbol
-            // demodulation.  Setting it to the channel bandwidth suppresses aliasing.
+            // AD9361 analog LPF bandwidth: set to widest receive BW, not sample rate,
+            // to prevent aliasing on the decimated path (os=40 without anti-alias FIR).
             const uint32_t ad9361_bw = *std::max_element(bws.begin(), bws.end());
-            auto& source = graph.emplaceBlock<gr::incubator::iio::IIOSource<std::complex<float>>>({
-                {"uri", uri},
-                {"sample_rate", static_cast<float>(cfg.rate)},
-                {"center_frequency", cfg.freq},
-                {"bandwidth", static_cast<double>(ad9361_bw)},
-                {"gain", cfg.gain_rx},
-                {"gain_mode", std::string("manual")},
-                {"rf_port", rfPort},
-                {"buffer_size", gr::Size_t{32768U}},
-                {"timeout_ms", gr::Size_t{1000U}},
-                // non_blocking=false: blocking refill() gives full 32768-sample
-                // buffers on every call.  On the local backend (uri=local:),
-                // non_blocking=true makes the iio_buffer non-blocking → refill()
-                // returns -ETIMEDOUT/partial reads → polling gaps and ~10 dB worse
-                // preamble SNR.  On the remote backend (uri=ip:…), setBlockingMode()
-                // returns ENOSYS and is silently ignored — the buffer stays in its
-                // default (blocking) mode regardless of this flag, so false is safe
-                // everywhere.
-                {"non_blocking", false},
-                {"max_overflow_count", gr::Size_t{10U}},
-                {"debug", false},   // IIOSource debug OFF — stdout spam triggers double-free on armv7
-                // DSP DC blocker: Pluto ignores LO offset, so DC spur sits at DC.
-                // IIR high-pass filter removes it; cutoff matches SoapySource config.
-                {"dc_blocker_enabled", true},
-                {"dc_blocker_cutoff", 2000.f},
-                {"overflow_recovery", true},
-            });
-            overflow_ptr = nullptr; // IIOSource has its own overflow counter (private); no SoapySource-style pointer exposure
+            auto& source = gr::incubator::iio::emplacePlutoSource<std::complex<float>>(
+                graph, cfg.device_param,
+                static_cast<float>(cfg.rate), cfg.freq,
+                static_cast<double>(ad9361_bw), cfg.gain_rx,
+                "manual", rfPort);
+            overflow_ptr = nullptr; // IIOSource has its own overflow counter
             wireDecodeChains([&graph, &source](std::size_t /*r*/, auto& downstream) { return graph.connect<"out", "in">(source, downstream).has_value(); });
         } else {
             throw std::runtime_error(std::format("driver=iio supports rx_channels.size() == 1; got {}", nRadio));
@@ -492,24 +462,11 @@ inline ScanGraph build_scan_graph(gr::Graph& graph, const ScanSetConfig& cfg, co
 #if GR4_LORA_HAS_IIO
     if (cfg.device == "iio") {
         // Direct libiio backend: bypasses SoapyPlutoPAPR for native FISH Ball / Pluto.
-        std::string uri = cfg.device_param;
-        if (uri.starts_with("uri=")) {
-            uri = uri.substr(4);
-        }
-        auto& source = graph.emplaceBlock<gr::incubator::iio::IIOSource<cf32>>({
-            {"uri", uri},
-            {"sample_rate", static_cast<float>(cfg.l1_rate)},
-            {"center_frequency", tileCentre},
-            {"bandwidth", static_cast<double>(cfg.l1_rate)},
-            {"gain", cfg.gain},
-            {"gain_mode", std::string("slow_attack")},
-            {"buffer_size", gr::Size_t{32768U}},
-            {"timeout_ms", gr::Size_t{1000U}},
-            {"max_overflow_count", gr::Size_t{10U}},
-            {"dc_blocker_enabled", true},
-            {"dc_blocker_cutoff", 2000.f},
-            {"overflow_recovery", true},
-        });
+        auto& source = gr::incubator::iio::emplacePlutoSource<cf32>(
+            graph, cfg.device_param,
+            static_cast<float>(cfg.l1_rate), tileCentre,
+            static_cast<double>(cfg.l1_rate), cfg.gain,
+            "slow_attack");
         if (!ok(graph.connect<"out", "in">(source, splitter))) {
             gr::lora::log_ts("error", "graph", "connect iio source -> splitter failed");
         }
@@ -629,24 +586,11 @@ inline void build_streaming_scan_graph(gr::Graph& graph, const ScanSetConfig& cf
 
 #if GR4_LORA_HAS_IIO
     if (cfg.device == "iio") {
-        std::string uri = cfg.device_param;
-        if (uri.starts_with("uri=")) {
-            uri = uri.substr(4);
-        }
-        auto& source = graph.emplaceBlock<gr::incubator::iio::IIOSource<cf32>>({
-            {"uri", uri},
-            {"sample_rate", static_cast<float>(cfg.l1_rate)},
-            {"center_frequency", centerFreq},
-            {"bandwidth", static_cast<double>(cfg.l1_rate)},
-            {"gain", cfg.gain},
-            {"gain_mode", std::string("slow_attack")},
-            {"buffer_size", gr::Size_t{32768U}},
-            {"timeout_ms", gr::Size_t{1000U}},
-            {"max_overflow_count", gr::Size_t{10U}},
-            {"dc_blocker_enabled", true},
-            {"dc_blocker_cutoff", 2000.f},
-            {"overflow_recovery", true},
-        });
+        auto& source = gr::incubator::iio::emplacePlutoSource<cf32>(
+            graph, cfg.device_param,
+            static_cast<float>(cfg.l1_rate), centerFreq,
+            static_cast<double>(cfg.l1_rate), cfg.gain,
+            "slow_attack");
         if (!ok(graph.connect<"out", "in">(source, controller))) {
             gr::lora::log_ts("error", "graph", "connect iio source -> controller failed");
         }
