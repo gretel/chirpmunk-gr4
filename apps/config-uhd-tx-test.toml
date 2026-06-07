@@ -1,0 +1,48 @@
+# ── UHD TX-only for SDR-to-SDR test ─────────────────────────────────────────
+
+[device]
+driver = "uhd"
+param = "type=b200"
+clock = "external"
+
+[logging]
+level = "INFO"
+
+[radio_868]
+freq = 869618000
+rx_channel = [0]
+tx_channel = 0
+rx_gain = 40
+tx_gain = 73.5
+lo_offset = 62500
+dc_offset_auto = true
+
+[trx]
+name = "UHD TX for SDR-to-SDR"
+radio = "radio_868"
+rate = 250000
+enable_tx = true
+use_aa_filter = true
+
+[trx.transmit]
+sf = 8
+bw = 62500
+cr = 8
+sync_word = 0x12
+preamble_len = 16
+
+# Use port 5557 so it doesn't conflict with IIO RX on 5556
+[trx.network]
+udp_listen = "127.0.0.1"
+udp_port = 5557
+status_interval = 10
+lbt = false
+tx_queue_depth = 8
+
+[trx.receive]
+bandwidths = [62500]
+
+[[trx.receive.chain]]
+label = "promisc"
+
+# No core/bridge/scan sections needed for TX-only

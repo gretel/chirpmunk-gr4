@@ -1060,4 +1060,3 @@ before passing on. Reject duplicate map keys at parse time (custom
 `lora.daemon.source` (L1 + L2 wrapper), every plugin under
 `lora.decoders.*` (L4 wrapper), `lora.storage.duckdb_writer` (L5
 parameterised inserts).
-
