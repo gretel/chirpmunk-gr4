@@ -29,7 +29,7 @@ repos:
     hooks:
       - id: pyright
         name: pyright
-        entry: /opt/homebrew/bin/basedpyright-langserver
+        entry: /opt/homebrew/bin/basedpyright
         language: system
         types: [python]
         pass_filenames: false
