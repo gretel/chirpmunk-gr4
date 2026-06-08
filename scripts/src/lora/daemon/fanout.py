@@ -30,7 +30,7 @@ import socket
 import time
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import cbor2
 
@@ -51,7 +51,9 @@ from lora.daemon.wire import (
     spectrum_to_cbor_dict,
     status_to_cbor_dict,
 )
-from lora.storage import DuckDBWriter
+
+if TYPE_CHECKING:
+    from lora.storage import DuckDBWriter
 
 _log = logging.getLogger("lora.daemon.fanout")
 

@@ -35,7 +35,7 @@ import sys
 import time
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import cbor2
 import setproctitle
@@ -58,7 +58,10 @@ from lora.daemon.lifecycle import Lifecycle
 from lora.daemon.source import UdpSource
 from lora.daemon.tx_proxy import TxProxy
 from lora.identity import IdentityStore
-from lora.storage import DatabaseLocked, DuckDBWriter
+from lora.storage import DatabaseLocked
+
+if TYPE_CHECKING:
+    from lora.storage import DuckDBWriter
 
 _log = logging.getLogger("lora.daemon")
 
@@ -174,8 +177,10 @@ async def run_daemon(config: DaemonConfig, *, config_path: Path | None = None) -
     # Storage + identity.
     identity = IdentityStore(config.identity)
     identity.warm_up()
-    writer: DuckDBWriter | None = None
+    writer: "DuckDBWriter | None" = None
     if config.storage.backend == "duckdb":
+        from lora.storage import DuckDBWriter
+
         writer = DuckDBWriter(config.storage)
         try:
             writer.start()

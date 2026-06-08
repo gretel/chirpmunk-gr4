@@ -5,7 +5,6 @@ description = "LoRa PHY for GNU Radio 4 — receiver software"
 requires-python = ">=3.14"
 dependencies = [
   "cbor2>=6.0.0rc1",
-  "duckdb",
   "pynacl",
   "pycryptodome",
   "segno",
@@ -19,11 +18,18 @@ dependencies = [
   "meshcore>=2.3",
 ]
 
+[project.optional-dependencies]
+duckdb = [
+  "duckdb",
+]
+
 [project.scripts]
 lora = "lora.cli:main"
 
 [dependency-groups]
 dev = [
+  "duckdb",
+  # remainder below
   "ruff",
   "pyright",
   "pytest",

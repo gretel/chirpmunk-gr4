@@ -36,9 +36,10 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
-import duckdb
+if TYPE_CHECKING:
+    import duckdb
 
 from lora.core.types import (
     LoraFrame,
@@ -96,6 +97,8 @@ _LOCK_PID_RE = re.compile(r"PID\s+(\d+)")
 
 def _maybe_lock_conflict(exc: BaseException, db_path: Path) -> DatabaseLocked | None:
     """Return a :class:`DatabaseLocked` if ``exc`` is DuckDB's lock error."""
+    import duckdb
+
     if not isinstance(exc, duckdb.IOException):
         return None
     raw = str(exc)
@@ -244,6 +247,8 @@ class DuckDBWriter:
                 # Schema-bump policy: archive any DB that predates
                 # status_heartbeats.source (SCHEMA_VERSION 2). No-op when the
                 # file is fresh, locked, or already current.
+                import duckdb
+
                 archive_if_pre_source_schema(self._config.db_path)
                 con = duckdb.connect(str(self._config.db_path))
                 apply_schema(con)
@@ -398,7 +403,7 @@ class DuckDBWriter:
             self._stats.enqueued += 1
         return True
 
-    def _run(self, con: duckdb.DuckDBPyConnection) -> None:
+    def _run(self, con: "duckdb.DuckDBPyConnection") -> None:
         """Writer thread main loop. Owns ``con`` end to end."""
         cur = con.cursor()
         buffers: dict[str, list[tuple[Any, ...]]] = defaultdict(list)
@@ -459,7 +464,7 @@ class DuckDBWriter:
 
     def _flush(
         self,
-        cur: duckdb.DuckDBPyConnection,
+        cur: "duckdb.DuckDBPyConnection",
         buffers: dict[str, list[tuple[Any, ...]]],
     ) -> None:
         """INSERT every buffered table via ``executemany``."""
@@ -491,7 +496,7 @@ class DuckDBWriter:
     def _should_checkpoint(self, last_checkpoint: float) -> bool:
         return time.monotonic() - last_checkpoint >= self._config.checkpoint_interval_s
 
-    def _do_checkpoint(self, cur: duckdb.DuckDBPyConnection) -> None:
+    def _do_checkpoint(self, cur: "duckdb.DuckDBPyConnection") -> None:
         try:
             cur.execute("CHECKPOINT")
         except Exception:  # pragma: no cover - logged

@@ -17,8 +17,10 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import duckdb
+if TYPE_CHECKING:
+    import duckdb
 
 log = logging.getLogger("lora.storage")
 
@@ -221,6 +223,8 @@ def archive_if_pre_source_schema(db_path: Path) -> Path | None:
     """
     if not db_path.exists():
         return None
+    import duckdb
+
     try:
         con = duckdb.connect(str(db_path), read_only=True)
     except duckdb.Error:
@@ -247,7 +251,7 @@ def archive_if_pre_source_schema(db_path: Path) -> Path | None:
     return archive
 
 
-def apply_schema(con: duckdb.DuckDBPyConnection) -> None:
+def apply_schema(con: "duckdb.DuckDBPyConnection") -> None:
     """Run all CREATE statements (idempotent) and stamp ``schema_meta``.
 
     Safe to call repeatedly: every statement uses ``IF NOT EXISTS`` and
@@ -263,7 +267,7 @@ def apply_schema(con: duckdb.DuckDBPyConnection) -> None:
     migrate(con)
 
 
-def migrate(con: duckdb.DuckDBPyConnection) -> None:
+def migrate(con: "duckdb.DuckDBPyConnection") -> None:
     """Apply additive migrations keyed off ``schema_meta.version``.
 
     Phase 2 has only one schema version so this is a no-op; the function

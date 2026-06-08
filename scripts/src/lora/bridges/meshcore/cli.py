@@ -48,7 +48,6 @@ from lora.bridges.meshcore.state import (
     initialize_eeprom_from_settings,
     load_eeprom,
 )
-from lora.core.cbor_stream import apply_config, wait_for_config
 from lora.core.config import load_config
 from lora.core.config_typed import TypedConfigError, load_typed
 from lora.core.logging import add_logging_args, setup_logging
@@ -106,7 +105,7 @@ def _tcp_send(sock: socket.socket, payload: bytes) -> None:
 
 
 def run_bridge(
-    tcp_port: int,
+    tcp_srv: socket.socket,
     udp_sock: socket.socket,
     sub_msg: bytes,
     udp_addr: tuple[str, int],
@@ -114,18 +113,16 @@ def run_bridge(
 ) -> None:
     """Run the bridge: TCP server + UDP subscriber.
 
-    *udp_sock* is an already-subscribed UDP socket.  *sub_msg* is the
-    CBOR subscribe message used for periodic keepalive.
+    *tcp_srv* is an already-bound TCP listening socket.
+    *udp_sock* is an already-subscribed UDP socket.
+    *sub_msg* is the CBOR subscribe message used for periodic keepalive.
     """
-    udp_sock.setblocking(False)
-    log.info("bridge running (UDP %s:%d)", udp_addr[0], udp_addr[1])
-
-    tcp_srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    tcp_srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    tcp_srv.bind(("0.0.0.0", tcp_port))
-    tcp_srv.listen(1)
     tcp_srv.setblocking(False)
-    log.info("listening on TCP port %d", tcp_port)
+    udp_sock.setblocking(False)
+    tcp_port = tcp_srv.getsockname()[1]
+    log.info(
+        "bridge running (UDP %s:%d, TCP port %d)", udp_addr[0], udp_addr[1], tcp_port
+    )
 
     sel = selectors.DefaultSelector()
     sel.register(tcp_srv, selectors.EVENT_READ, data="tcp_accept")
@@ -376,6 +373,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Load typed config (best-effort).  Bridge runs even without a TOML
     # so legacy CLI invocations keep working.
+    cfg_dict: dict[str, Any] = {}
     typed = None
     try:
         cfg_dict = load_config(args.config)
@@ -394,26 +392,50 @@ def main(argv: list[str] | None = None) -> int:
     else:
         udp_host, udp_port = "127.0.0.1", 5555
 
+    # ---- TCP listener (established early so it's always up) ---------
+    if args.port is not None:
+        tcp_port = args.port
+    elif typed is not None:
+        tcp_port = typed.bridge_meshcore.listen_port
+    else:
+        tcp_port = BRIDGE_PORT
+
+    tcp_srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    tcp_srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        tcp_srv.bind(("0.0.0.0", tcp_port))
+        tcp_srv.listen(1)
+    except OSError as exc:
+        log.error("TCP listener bind failed on port %d: %s", tcp_port, exc)
+        return 2
+    log.info("listening on TCP port %d", tcp_srv.getsockname()[1])
+
+    # ---- Subscribe to core / lora_trx (non-blocking) -----------------
+    # The select loop handles config updates dynamically when they
+    # arrive over UDP.  We read initial PHY from the TOML config so
+    # the bridge starts immediately without waiting for a config
+    # message.
     log.info("connecting to lora_trx at %s:%d", udp_host, udp_port)
     udp_sock, sub_msg, udp_addr = create_udp_subscriber(
         udp_host,
         udp_port,
         sync_words=[0x12],
-        timeout=30.0,
+        blocking=False,
     )
-    config_msg = wait_for_config(udp_sock, timeout=30.0)
-    raw_cfg = apply_config(config_msg)
-    phy = config_msg.get("phy", {})
 
-    freq_mhz = phy.get("freq", 869_618_000.0) / 1e6
-    bw_khz = phy.get("bw", 62_500) / 1e3
-    sf = int(phy.get("sf", 8))
-    cr = (
-        int(phy.get("cr", 4)) + 4
-    )  # lora_trx sends internal 1-4, bridge stores external 5-8
-    tx_power = int(phy.get("tx_gain", 14))
+    # PHY from TOML [trx.transmit] + [radio_868], or defaults.
+    trx_raw = cfg_dict.get("trx", {})
+    tx_raw = trx_raw.get("transmit", {}) if isinstance(trx_raw, dict) else {}
+    radio_raw = cfg_dict.get("radio_868", {})
+
+    freq_mhz = float(radio_raw.get("freq", 869_618_000)) / 1e6
+    bw_khz = float(tx_raw.get("bw", 62_500)) / 1e3
+    sf = int(tx_raw.get("sf", 8))
+    raw_cr = tx_raw.get("cr", 4)
+    cr = int(raw_cr) + 4  # TOML stores 1-4, bridge uses 5-8
+    tx_power = int(radio_raw.get("tx_gain", 14))
     log.info(
-        "PHY: %.3f MHz SF%d BW %.1fk CR %d TX %d",
+        "PHY: %.3f MHz SF%d BW %.1fk CR %d TX %d (from config)",
         freq_mhz,
         sf,
         bw_khz,
@@ -421,7 +443,8 @@ def main(argv: list[str] | None = None) -> int:
         tx_power,
     )
 
-    meshcore_cfg = raw_cfg.get("meshcore", {}) if isinstance(raw_cfg, dict) else {}
+    # Legacy [meshcore] settings from TOML (may be empty).
+    meshcore_cfg = cfg_dict.get("meshcore", {}) if isinstance(cfg_dict, dict) else {}
     region_scope = (
         args.region_scope
         if args.region_scope is not None
@@ -432,13 +455,6 @@ def main(argv: list[str] | None = None) -> int:
 
     lat_e6 = int(float(meshcore_cfg.get("lat", 0.0)) * 1e6)
     lon_e6 = int(float(meshcore_cfg.get("lon", 0.0)) * 1e6)
-
-    if args.port is not None:
-        tcp_port = args.port
-    elif typed is not None:
-        tcp_port = typed.bridge_meshcore.listen_port
-    else:
-        tcp_port = int(meshcore_cfg.get("port", BRIDGE_PORT))
 
     node_name = (
         args.name
@@ -609,7 +625,7 @@ def main(argv: list[str] | None = None) -> int:
         len(state.contacts),
     )
 
-    run_bridge(tcp_port, udp_sock, sub_msg, udp_addr, state)
+    run_bridge(tcp_srv, udp_sock, sub_msg, udp_addr, state)
     return 0
 
 
